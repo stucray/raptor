@@ -1,0 +1,400 @@
+spring:
+  flyway:
+    # raptor owns no `public` migration history. paddock's read-side history
+    # (V1-V39) went to overround-analysis with the read side (PRD #309), and
+    # Boot's own Flyway, pointed at an empty db/migration, would find those
+    # versions applied on the shared database with nothing local to match them
+    # and refuse to start. raptor's history is the acquisition one, run by
+    # AcquisitionMigrations against raw/query/batch.
+    enabled: false
+  mvc:
+    problemdetails:
+      # RFC 7807 error bodies, so a refusal's REASON reaches the caller.
+      # Without this Spring answers a ResponseStatusException with
+      # {status, error, path} and drops the message entirely — the capture-now
+      # refusals ("a capture is already running (pid N)", "that run would still
+      # be going at the 11:00Z fire") exist to be read, and a bare 409 is
+      # indistinguishable from a broken button. Found by calling the real
+      # endpoint; every test had asserted only the status code.
+      enabled: true
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    # The acquisition read loop must drain and the raw writer must commit before
+    # the JVM exits, or the tail of a live market is lost.
+    timeout-per-shutdown-phase: 60s
+  batch:
+    # No `jdbc:` block here. Boot 4's BatchProperties has exactly one property,
+    # spring.batch.job.name, so `spring.batch.jdbc.*` bound to nothing and
+    # configured nothing (#84). The table prefix and the isolation level live on
+    # @EnableJdbcJobRepository, where they take effect.
+    job:
+      # Jobs are launched deliberately, never by merely starting the app. A
+      # resident service that begins ingesting several million rows because
+      # someone restarted it is not a service anyone can operate.
+      enabled: false
+  docker:
+    compose:
+      file: ../compose.yaml
+      # start-only, not the default start-and-stop: the JVM starts the
+      # database but never stops it. Once paddock is resident and holds a
+      # live capture (PRD #73), a Ctrl-C on a dev session under the default
+      # would stop Postgres mid-match and lose data that is unreplayable.
+      # The auto-start half is kept — it is genuinely useful, and
+      # `spring.docker.compose.start.skip: if-running` (the default) means a
+      # container that is already up is reused rather than recreated.
+      #
+      # `spring.docker.compose.stop.command` must never be set to `down`:
+      # `down` removes the container, and with `-v` in stop.arguments it
+      # would remove the named volume and with it the whole database. Under
+      # start-only nothing stops the stack at all, which is the point.
+      lifecycle-management: start-only
+
+server:
+  # Localhost-only by design (PRD: no auth in v1; binding beyond localhost
+  # brings auth in first). The container profile overrides via SERVER_ADDRESS.
+  address: 127.0.0.1
+  port: 8087
+  # See spring.lifecycle above: in-flight acquisition work finishes rather than
+  # being cut off mid-write.
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      group:
+        # A HEALTH INDICATOR'S DETAILS ARE COMPUTED AND THROWN AWAY unless a
+        # group asks for them: `show-details` defaults to `never`, so
+        # /actuator/health/recorder answers with nothing at all and every
+        # detail below — the recorder's state, the session it is on, how long
+        # since a frame arrived, the spill's free space — is unreachable. The
+        # runbook tells an operator to curl exactly that endpoint during a
+        # capture night, which is how this was found: by following it.
+        #
+        # Scoped to a group rather than turning details on at the root, so
+        # nothing else starts publishing internals it was not asked for.
+        #
+        # Named `capture` and not `recorder` because A GROUP MAY NOT SHARE A
+        # NAME WITH A CONTRIBUTOR: Boot refuses to register the indicator at
+        # all — 'HealthContributor with name "recorder" clashes with group' —
+        # and every @SpringBootTest in the application fails to load its
+        # context, which is a spectacular way to learn it.
+        capture:
+          # `analysis` LEFT THIS GROUP in slice 10 (#255), and the reason is the
+          # PRD's second complaint about the conflation: a heartbeat that exists
+          # to say "you are losing data you can never get back" was also
+          # speaking for a derivation that can simply be run again. The
+          # derivation is overround-analysis's now, and reports its own
+          # staleness on its own `/actuator/health/derivation`; the deployed
+          # heartbeat dropped its STALE-ANALYSIS probe in the same change.
+          # Removing it from the list is the load-bearing half — the indicator
+          # itself survives until #256, and with the close-out off it would
+          # publish `stale: true` every night forever.
+          # `partitionRunway` cannot turn the group over (it is always
+          # UP and carries a `low` flag instead): restarting a JVM does not
+          # create a partition, and the thing it warns about is known months
+          # ahead. It is in the list because the list is explicit — a new
+          # contributor does NOT join a group that names its members.
+          include: recorder,scope,spill,captureCoverage,partitionRunway
+          show-details: always
+
+raptor:
+  datasource:
+    # One database, two logins (PRD #73). The owner creates and writes the
+    # acquisition schemas; the read identity is refused on `raw` outright and
+    # cannot write `query`. It owns `public`, which is the read side's own.
+    #
+    # The restricted identity is Spring's @Primary, so anything that does not
+    # ask for @Acquisition explicitly gets it. That is the safe direction for a
+    # default to point.
+    url: ${RAPTOR_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:5434/paddock}
+    owner:
+      username: ${RAPTOR_DATASOURCE_USERNAME:paddock}
+      password: ${RAPTOR_DATASOURCE_PASSWORD:dev}
+    read:
+      username: ${RAPTOR_READ_USERNAME:paddock_reader}
+      # Also the Flyway placeholder acquisition V6 creates the role with, so the
+      # credential has exactly one definition.
+      password: ${RAPTOR_READ_PASSWORD:dev}
+  analysis-role:
+    # overround-analysis's login (#247, PRD #245). paddock never connects as it;
+    # acquisition V27 creates the role with this password, the same way V6
+    # creates paddock_reader's, so a fresh database needs no provisioning step.
+    # overround-analysis is configured with the same value.
+    password: ${RAPTOR_ANALYSIS_PASSWORD:dev}
+  raw-store:
+    # THE SYSTEM OF RECORD'S OWN SCHEMA, not the thing writing to it (#267).
+    #
+    # raw.stream_message is `partition by range (pt)`, and a row outside every
+    # partition is rejected outright — the recorder then cannot write the system
+    # of record at all. V3 pre-created twelve months from the moment the
+    # migration ran, and a Flyway migration never runs again, so for a year the
+    # runway shrank by a day a day with nothing extending it and nothing saying
+    # so. PartitionMaintenance is what moves it now; partitionRunway is what
+    # reports it when PartitionMaintenance has stopped.
+    #
+    # How much runway the extender tops the table back up to.
+    partition-runway-target: ${RAPTOR_PARTITION_TARGET:365d}
+    # And how little may remain before partitionRunway calls it low. Well inside
+    # the target on purpose: the gap between the two is the room in which the
+    # extender is expected to work, so the warning fires only when it has not.
+    # Two thresholds a day apart would make every ordinary top-up look like a
+    # rescue, and a warning that only trips inside a fortnight is one that trips
+    # during a card, when nothing can be done about it.
+    partition-runway-warning: ${RAPTOR_PARTITION_WARNING:120d}
+    # Daily, because the unit of work is a month. The initial delay is what
+    # covers a machine that has been off long enough to matter, and is long
+    # enough that no test context lives to see the DDL.
+    partition-check-interval: ${RAPTOR_PARTITION_INTERVAL:24h}
+    partition-check-initial-delay: ${RAPTOR_PARTITION_INITIAL_DELAY:2m}
+  recorder:
+    # Whether this instance may record. On is not a promise to record: an
+    # instance that cannot take the single-writer lease stands by, and one with
+    # no stream source configured — every instance, until S6 lands the live
+    # source — says so and captures nothing.
+    enabled: ${RAPTOR_RECORDER_ENABLED:true}
+    # How long the recorder may sit in a non-RECORDING state, WITH markets in
+    # scope, before captureCoverage turns over (#184). The fact the attempt
+    # counter cannot see: it only moves when an attempt COMPLETES having written
+    # nothing, so a supervisor wedged inside a connect never increments it, and
+    # `restart: unless-stopped` never fires because the process has not exited.
+    # Ten minutes is past everything benign — the #176 backoff caps at a minute,
+    # the factory re-checks scope every 30s while idle, the poll runs every 15m.
+    # STANDBY is excluded in code: holding no lease is single-writer working.
+    stuck-state-timeout: ${RAPTOR_RECORDER_STUCK_STATE_TIMEOUT:10m}
+    watchdog:
+      # A socket that is dead does not say so. macOS sleep leaves connections
+      # that look alive until a write finally fails, which can take minutes of a
+      # match; both checks below exist to shorten that to one interval.
+      interval: ${RAPTOR_RECORDER_WATCHDOG_INTERVAL:10s}
+      # Betfair heartbeats every 5s, so 30s of silence is six missed ones:
+      # comfortably past jitter, well short of a match.
+      silence-timeout: ${RAPTOR_RECORDER_SILENCE_TIMEOUT:30s}
+      # Wall clock running this far ahead of the monotonic clock means the
+      # machine suspended. Jitter and NTP slew are milliseconds; a suspend is
+      # seconds to hours.
+      clock-jump-tolerance: ${RAPTOR_RECORDER_CLOCK_JUMP:5s}
+    spill:
+      # Where a refused batch goes when Postgres will not take it. Exceptional
+      # by construction: no file exists in normal operation, nothing reads one
+      # except spillReplayJob, and it is never the primary path. Without it a
+      # ten-minute database restart on a Saturday evening loses a match
+      # permanently, because Betfair's clk replay covers minutes rather than
+      # tens of them.
+      #
+      # Deliberately NOT under the custody root: raw there is capture output,
+      # written only by a capture process and never edited. This is transient
+      # working state that deletes itself once the messages are safe, and mixing
+      # the two would put something ephemeral inside the one tree whose whole
+      # value is that nothing in it ever changes.
+      directory: ${RAPTOR_SPILL_DIR:${user.home}/.raptor/spill}
+      # Below this, health reports DOWN. Disk full AND database down together is
+      # the one failure the spill cannot absorb, so the point of measuring is to
+      # never arrive there without warning.
+      min-free: ${RAPTOR_SPILL_MIN_FREE:1GB}
+  betfair:
+    # CREDENTIALS COME FROM THE ENVIRONMENT, and every default here is empty on
+    # purpose. bin/up wraps the application in `sops exec-env`, so the encrypted
+    # file stays the only place they live: nothing decrypted is written to disk,
+    # and a process started without that wrapper simply has no session and says
+    # so, rather than running on a copy someone exported by hand months ago.
+    #
+    # The PEM pair travels base64-encoded because a multi-line value survives
+    # neither a compose `environment:` entry nor most shells intact; one line
+    # always does.
+    app-key: ${BETFAIR_APP_KEY:}
+    username: ${BETFAIR_USERNAME:}
+    password: ${BETFAIR_PASSWORD:}
+    cert-pem-base64: ${BETFAIR_CERT_PEM_B64:}
+    key-pem-base64: ${BETFAIR_KEY_PEM_B64:}
+    # Betfair expires an idle session in about four hours and THE STREAM DOES
+    # NOT COUNT as activity — only keepAlive does — so a resident recorder has
+    # to say something well inside that window or lose a session it is using.
+    keep-alive-interval: ${RAPTOR_BETFAIR_KEEP_ALIVE:3h}
+    # The same capture.properties the launcher reads, not a copy: the league set
+    # has one definition, and git is its audit trail.
+    capture-config-file: ${RAPTOR_CAPTURE_CONFIG:./config/capture.properties}
+    stream:
+      # OFF BY DEFAULT, AND IT STAYS OFF — this is the value a JVM gets when
+      # nothing sets the variable, which in practice means a developer running
+      # `./mvnw -pl backend spring-boot:run`. Everything else here is inert
+      # configuration; this switch is the one that makes this process open a
+      # Betfair stream and write the system of record, and a dev loop must not
+      # do that because someone restarted it.
+      #
+      # DO NOT "make this consistent with compose.yaml". Since #122 the
+      # container defaults the same variable to TRUE, and the difference is the
+      # point: the resident deployment is the only thing capturing and must not
+      # be stood down by a restart, while a development JVM must not start
+      # capturing at all. The capture lease would refuse the second recorder,
+      # but a lease is code — the narrower default is what makes it a
+      # second line of defence rather than the only one.
+      #
+      # With it off — or with no credentials — the supervisor takes no lease
+      # and says it is capturing nothing.
+      enabled: ${RAPTOR_STREAM_ENABLED:false}
+      # Newline-delimited JSON over TLS; there is no websocket in this protocol.
+      host: ${RAPTOR_STREAM_HOST:stream-api.betfair.com}
+      port: ${RAPTOR_STREAM_PORT:443}
+      # Five seconds, matching record_suspensions.py: the heartbeat is what makes
+      # a quiet market distinguishable from a dead socket, and the recorder
+      # watchdog's 30s silence timeout is six of these.
+      heartbeat: ${RAPTOR_STREAM_HEARTBEAT:5s}
+      # Zero conflation — every change. The corpus exists to answer whether a bet
+      # could have been filled, and conflation deletes exactly the 2-4 second
+      # suspensions that question turns on; one-minute conflation on the historic
+      # BASIC feed is why these captures had to be made at all.
+      conflate: ${RAPTOR_STREAM_CONFLATE:0s}
+      # How often to ask scope whether the market list has moved. Far shorter
+      # than the 15m catalogue poll because it is cheap and NOT on the read loop.
+      resubscribe-interval: ${RAPTOR_STREAM_RESUBSCRIBE:60s}
+  scope:
+    # What replaces the capture window. A fixture enters scope when its kickoff
+    # comes inside the horizon and leaves when it is over, so a 20:00Z midweek
+    # tie and a 12:30Z Saturday kickoff are both covered without subscribing to
+    # the hours between them — and a short-notice reschedule is picked up on the
+    # next poll instead of missed.
+    horizon: ${RAPTOR_SCOPE_HORIZON:4h}
+    # Deliberately the 900s of record_suspensions.py's ID_REFRESH_S: a cadence
+    # already exercised against Betfair's rate limits over a season.
+    poll-interval: ${RAPTOR_SCOPE_POLL_INTERVAL:15m}
+    # Forward visibility, and NOT a wider horizon (#265). The horizon above
+    # decides what gets subscribed and is what keeps a Saturday inside Betfair's
+    # 200-market cap; this asks its own sorted query, puts nothing into scope,
+    # and exists so `lid` can answer "how long have I got" rather than only "is
+    # it safe now". Slow on purpose: a kickoff list does not move on a
+    # fifteen-minute timescale.
+    lookahead: ${RAPTOR_SCOPE_LOOKAHEAD:48h}
+    lookahead-interval: ${RAPTOR_SCOPE_LOOKAHEAD_INTERVAL:30m}
+    # The two guards that keep scope self-clearing. Betfair's cap is 200
+    # markets, so fixtures held open forever — abandoned, voided, or never
+    # closed cleanly — cost a Saturday's capacity with nothing saying why.
+    #
+    # Both were dead until #127. Discovery filters on a start-time window, so a
+    # market left the poll at kickoff and could never be seen in-play or seen to
+    # close: all 76 markets of the first two resident nights were retired by
+    # kickoff-timeout, six hours past kickoff, each holding a slot the whole
+    # time. Markets in scope are now followed by id, so in-play-timeout does the
+    # work it was written for and kickoff-timeout goes back to being what it
+    # says — the guard for a fixture that never kicked off at all.
+    in-play-timeout: ${RAPTOR_SCOPE_IN_PLAY_TIMEOUT:130m}
+    kickoff-timeout: ${RAPTOR_SCOPE_KICKOFF_TIMEOUT:6h}
+    # Hold a macOS power assertion while any market is in-play. A resident
+    # service does not stop a laptop sleeping, and sleep is the largest single
+    # cause of gaps in the corpus — 2026-08-23 lost the back half of two
+    # matches while the log went on printing heartbeats. Held only for the
+    # in-play interval: a recorder that pins a laptop awake for a fortnight to
+    # cover four hours of football gets switched off, and then covers nothing.
+    hold-power-assertion: ${RAPTOR_SCOPE_POWER_ASSERTION:true}
+    # How many catalogue polls may fail in a row before captureCoverage turns
+    # over (#180). Three at the interval above is ~45 minutes of not knowing
+    # what is on: long enough that a single Betfair blip cannot fire it, short
+    # enough to catch a revoked key before an evening's kickoffs. This is the
+    # ONE capture verdict not gated on scope being non-empty, because the empty
+    # scope it would be gated on is the one the failing poll could not refresh —
+    # which is exactly why a discovery failure and an international break used
+    # to be the same observation.
+    poll-failures-before-red: ${RAPTOR_SCOPE_POLL_FAILURES_BEFORE_RED:3}
+  close-out:
+    # The nightly close-out (#199). Since #316 it only fetches the current
+    # football-data season into raw: overround-analysis projects query now, as
+    # the first step of its own close-out at 00:30Z, an hour after this.
+    #
+    # 23:30Z, and the hour is not arbitrary. A 20:00Z kickoff leaves scope at the
+    # 130-minute in-play timeout (~22:10Z), so the evening's football is over; and
+    # 23:30Z is 06:30 local, so the work finishes before anyone is awake. It
+    # therefore closes out the CURRENT UTC day, not the previous one — which is
+    # the opposite of what "overnight close-out" reads like, and is exactly the
+    # kind of local-vs-UTC reasoning the backup agent's plist has a scar from.
+    #
+    # IT HAS NO TIMER IN THE APP SINCE #334. It was a Spring cron, and Spring
+    # waits out a cron's delay on the Docker VM's monotonic clock, which stops
+    # while the Mac sleeps: the firing slipped by however long the host slept
+    # (63 min on 2026-09-22/23), silently. the launchd close-out agent
+    # POSTs /ops/close-out instead; StartCalendarInterval runs a firing missed
+    # during sleep on wake. `enabled: false` removes the endpoint.
+    enabled: ${RAPTOR_CLOSE_OUT:true}
+    # When a run is DUE, in UTC, and how long after that capture health calls it
+    # overdue if none has started. The app does not fire at this time; it
+    # checks. The launchd plist says 06:30 because StartCalendarInterval is
+    # LOCAL and the host runs at UTC+7 — the two must agree, and `overdue` on
+    # /actuator/health/capture is what says when they stop agreeing.
+    due: ${RAPTOR_CLOSE_OUT_DUE:23:30}
+    overdue-after: ${RAPTOR_CLOSE_OUT_OVERDUE_AFTER:PT1H}
+  projection:
+    capture-ledger:
+      # The one projection that runs on a timer rather than on request, and the
+      # exception is about what this projection is FOR. The health screen exists
+      # to answer "did last night's capture happen" in the morning; a ledger
+      # that only moves when somebody remembers to POST answers it with
+      # yesterday's state and looks exactly as confident. The ledger it replaces
+      # was refreshed by the spool import poll, so this restores a property
+      # being taken away rather than adding a new one.
+      #
+      # Affordable because of what it costs: nine aggregates over rows already
+      # written, a few seconds, a few dozen rows replaced. Off by default in
+      # code so that a scheduled Batch launch does not appear in the middle of
+      # every @SpringBootTest context; on here, which is where the application
+      # actually runs.
+      enabled: ${RAPTOR_CAPTURE_LEDGER_REFRESH:true}
+      interval: ${RAPTOR_CAPTURE_LEDGER_INTERVAL:PT5M}
+  sources:
+    # The custody root: where the raw every source is derived from lives.
+    # Paddock-governed since PRD #51 slice 5 — deliberately NOT inside the
+    # data repo's working tree, so raw custody is not a side effect of
+    # where the analysis scripts happen to be checked out. Each adapter
+    # declares its custody path relative to this, so moving the root again
+    # is one change here rather than one per source. Written by each source's
+    # capture process and nothing else — which since S8/S9 includes paddock
+    # itself, for the two sources it acquires: the recorder's captures and the
+    # football-data archive below. Every other tree under it stays read-only.
+    data-root: ${RAPTOR_DATA_ROOT:${user.home}/raptor/data}
+  football-archive:
+    # The football-data.co.uk results archive, fetched in-process since S9.
+    # Replaces a launchd job that ran a Python fetch script.
+    #
+    # Every request is conditional: the ETag of each file we hold is sent back
+    # and the server answers 304 with no body, so a full sweep of 748
+    # division x season pairs transfers a few hundred KB rather than ~90 MB.
+    # THE APEX, not `www.` (#286). The site 302s www to it; the client
+    # follows that now, but a full sweep is 748 files against a published
+    # rate limit of 1000, and a redirect per file would make it 1496.
+    base-url: ${FOOTBALL_ARCHIVE_BASE_URL:https://football-data.co.uk/mmz4281}
+    # A PATH THIS APPLICATION WALKS AND WRITES, so it cannot be derived from
+    # `raptor.data-root` above: that one is deliberately the HOST path, because
+    # the health screen names where raw lives for a human reading the screen.
+    # The corpus roots beside it are container paths for the same reason this
+    # one now is — a root that is walked and a root that is displayed are two
+    # different settings that happened to have the same value until S9 made
+    # paddock the capture process for this source. Defaulted to the host layout
+    # for the dev loop, overridden to the mount point in compose.
+    custody-root: ${FOOTBALL_ARCHIVE_CUSTODY_ROOT:${RAPTOR_DATA_ROOT:${user.home}/raptor/data}/football-data.co.uk}
+    sweep:
+      # The CURRENT SEASON only: 22 requests, which is what keeps last night's
+      # results arriving. A full revalidation is an ops decision (POST
+      # /ops/fetch-archive) — the server publishes a rate limit of 1000 per
+      # window, and a nightly full sweep would spend three quarters of it to
+      # catch the rare retro correction to a completed season.
+      #
+      # IT HAD A CRON OF ITS OWN UNTIL #200, at 08:30Z. It fetched on that timer
+      # and nothing ever projected the result, so raw.football_file and
+      # query.football_match agreed with each other and both stopped four days
+      # back. The fetch is a step of the nightly close-out now (23:30Z, both
+      # halves), and what is left here is the switch — which is what keeps a test
+      # context from reaching the live archive.
+      enabled: ${FOOTBALL_ARCHIVE_SWEEP:true}
+  capture:
+    # The paddock-owned capture configuration (PRD #51 slice 6): which leagues
+    # and market types capture records. A path rather than the settings
+    # themselves because it is read on both sides of the application —
+    # acquisition's CaptureSelection scopes on it, the read side shows it beside
+    # what capture actually did. Mounted read-only into the container; if it is
+    # absent the capture panel says so rather than failing.
+    #
+    # It described a schedule too, until S8 unloaded the agent that had one.
+    config-file: ${RAPTOR_CAPTURE_CONFIG:./config/capture.properties}

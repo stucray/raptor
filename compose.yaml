@@ -1,0 +1,158 @@
+# raptor's local stack.
+#
+# BEFORE THE CUTOVER (#323) THIS IS A DEVELOPMENT STACK, AND IT IS KEPT APART
+# FROM THE LIVE ONE ON PURPOSE. Its own compose project (`name: raptor`, so its
+# own volume) and its own host ports (5434, 8087), so starting it can never
+# reach the database paddock is capturing into, and the recorder is OFF by
+# default here. The cutover repoints raptor at the existing database and
+# volume; that is a deliberate, rehearsed step, not something a `docker
+# compose up` in the wrong directory should be able to do.
+#
+# Dev loop:   `./mvnw -pl app spring-boot:run` auto-starts `postgres` via
+#             spring-boot-docker-compose. Lifecycle management is
+#             `start-only`: quitting the app LEAVES `postgres` RUNNING, because
+#             a resident recorder must never lose its database to a Ctrl-C.
+#             Stop it deliberately with `docker compose stop postgres`.
+#
+# All published ports bind 127.0.0.1 only. raptor has no authentication; if it
+# ever binds beyond localhost, auth goes in first.
+name: raptor
+
+services:
+  postgres:
+    image: postgres:17
+    # THE OTHER HALF OF db/migration/V38. `create extension pg_stat_statements`
+    # builds the SQL objects and nothing else: the module that populates them
+    # lives in shared memory and is loaded only from here, so without this line
+    # the migration goes green and every read of the view errors with
+    # "pg_stat_statements must be loaded via shared_preload_libraries".
+    # Changing it needs a server restart, which is why it was done in a window
+    # with nothing in scope (#301, for #255 criterion 6).
+    command: postgres -c shared_preload_libraries=pg_stat_statements
+    # SURVIVE A DAEMON RESTART, A REBOOT AND A CRASH — but never an explicit
+    # stop. `unless-stopped` is the one policy that respects `bin/down`: a
+    # container the user stopped stays stopped, where `always` would bring it
+    # back and make the charter's "paddock must never stop the database" moot
+    # in the other direction. Before this, all three were `no`, Docker Desktop
+    # does not auto-start, and there is no LaunchAgent for the stack — so a
+    # reboot left the recorder off with nothing to say so.
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paddock
+      POSTGRES_USER: paddock
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paddock -d paddock"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  backend:
+    # RAPTOR_IMAGE_TAG selects a published version or a rollback tag.
+    image: ghcr.io/stucray/raptor:${RAPTOR_IMAGE_TAG:-local}
+    # The recorder is the reason this matters: it is a resident writer holding
+    # a lease, and a restart costs a re-subscribe where an absence costs the
+    # capture. `CaptureLease` and the ABANDONED reconciliation at acquisition
+    # (#129) already handle coming back after an unclean exit.
+    restart: unless-stopped
+    profiles:
+      - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Two identities against one database (PRD #73). The owner writes the
+      # acquisition schemas; the read identity is refused on `raw`.
+      RAPTOR_DATASOURCE_URL: jdbc:postgresql://postgres:5432/paddock
+      RAPTOR_DATASOURCE_USERNAME: paddock
+      RAPTOR_DATASOURCE_PASSWORD: dev
+      RAPTOR_READ_PASSWORD: dev
+      # overround-analysis's role, created by acquisition V27 (#247). paddock
+      # does not connect as it.
+      RAPTOR_ANALYSIS_PASSWORD: dev
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: "8080"
+      SPRING_DOCKER_COMPOSE_ENABLED: "false"
+      # The health screen names where raw lives ON THE HOST, so this stays the
+      # host path even though the custody root is now mounted below: a
+      # container path would resolve to nothing for anyone reading the screen.
+      #
+      # It was display-only until S8, on the reasoning that "the app never reads
+      # raw — the normaliser does". That stopped being true when the historic
+      # load moved in-process, and the capture load finished it off: paddock
+      # ingests both corpora itself now. The two roots below are what the
+      # scanners actually walk, and they are container paths.
+      RAPTOR_DATA_ROOT: ${RAPTOR_DATA_ROOT:-${HOME}/raptor/data}
+      RAPTOR_CORPUS_HISTORIC_ROOT: /custody/betfair-historic/raw/xds_nfs/edp_processed/BASIC
+      RAPTOR_CORPUS_CAPTURE_ROOT: /custody/betfair-live/captured
+      # The third root that is walked rather than displayed, and the only one
+      # paddock WRITES (#141). It needs its own setting for exactly the reason
+      # the two above do — RAPTOR_DATA_ROOT is the host path — and without it
+      # fetchArchiveJob dies on `AccessDeniedException: /Users` inside a second.
+      FOOTBALL_ARCHIVE_CUSTODY_ROOT: /custody/football-data.co.uk
+      RAPTOR_CAPTURE_CONFIG: /config/capture.properties
+      # Passed through from the launching shell, never defaulted here: bin/up
+      # runs this under `sops exec-env`, so the values exist for the lifetime of
+      # that command and nowhere else. Started any other way they are simply
+      # absent, and the recorder says it has no credentials instead of
+      # pretending to capture — which is the safe direction for a default to
+      # point when the alternative is a silently idle night.
+      BETFAIR_APP_KEY: ${BETFAIR_APP_KEY:-}
+      BETFAIR_USERNAME: ${BETFAIR_USERNAME:-}
+      BETFAIR_PASSWORD: ${BETFAIR_PASSWORD:-}
+      BETFAIR_CERT_PEM_B64: ${BETFAIR_CERT_PEM_B64:-}
+      BETFAIR_KEY_PEM_B64: ${BETFAIR_KEY_PEM_B64:-}
+      # The switch that makes this instance open a Betfair stream and write the
+      # system of record. OFF by default until the cutover (#323): before it,
+      # paddock is the live recorder, and a second stream on the same app key is
+      # not something a development stack should open unasked. The cutover flips
+      # this default to true, for the reason paddock learned twice (a default
+      # that stands the recorder down silently ends the night; a duplicate is
+      # what the capture lease refuses).
+      RAPTOR_STREAM_ENABLED: ${RAPTOR_STREAM_ENABLED:-false}
+      # THE POWER ASSERTION CANNOT WORK IN HERE. `caffeinate` is a macOS binary
+      # and this is a Linux container, so the assertion paddock holds while a
+      # market is in-play has nothing to hold. Said explicitly rather than left
+      # to fail quietly at the file-exists check, because the failure mode it
+      # guards against — the laptop sleeping mid-match — is the largest single
+      # cause of gaps in the corpus. The assertion is held on the HOST instead,
+      # by `scripts/keep-awake`: a launchd agent that polls this container's own
+      # /actuator/health/capture and holds `caffeinate` while it says RECORDING
+      # (#107). `bin/deploy-agents` installs it; `scripts/keep-awake --status` checks it.
+      RAPTOR_SCOPE_POWER_ASSERTION: "false"
+      # The spill lives on the HOST. Left inside the container it would be
+      # written to the overlay filesystem, which is discarded the next time the
+      # image is rebuilt — so the one file whose entire purpose is to survive a
+      # database outage would not survive a deployment. The free-space health
+      # metric would also be measuring the wrong disk.
+      RAPTOR_SPILL_DIR: /spill
+    volumes:
+      # Read-WRITE, unlike everything else mounted here: this is the one place
+      # the application is meant to write on the host.
+      - ${RAPTOR_SPILL_DIR:-${HOME}/.raptor/spill}:/spill
+      # The capture config the launcher reads, mounted rather than baked in:
+      # the file in git is the one definition, and a copy inside the image
+      # could disagree with the one the recorder actually ran on.
+      - ./config:/config:ro
+      # The custody root, READ-ONLY and enforced by Docker rather than by
+      # review. Raw files are written only by each source's capture process;
+      # the ingest jobs read them and nothing in this application may ever
+      # write here.
+      - ${RAPTOR_DATA_ROOT:-${HOME}/raptor/data}:/custody:ro
+      # ...WITH ONE EXCEPTION, nested read-write over the read-only parent: the
+      # football-data archive, which paddock fetches itself since S9 and is
+      # therefore the capture process for. The rule above is unchanged and is
+      # what this mount is shaped to honour — "raw files are written only by
+      # each source's capture process" — so the writable window is exactly the
+      # one source paddock captures, and every other tree stays refused by
+      # Docker rather than by review.
+      - ${RAPTOR_DATA_ROOT:-${HOME}/raptor/data}/football-data.co.uk:/custody/football-data.co.uk
+    ports:
+      - "127.0.0.1:8087:8080"
+
+volumes:
+  postgres-data:

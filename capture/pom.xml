@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>com.stucray</groupId>
+		<artifactId>raptor-parent</artifactId>
+		<version>0.1.0-SNAPSHOT</version>
+		<relativePath>../pom.xml</relativePath>
+	</parent>
+	<artifactId>raptor-capture</artifactId>
+	<description>Capture: recorder, ingest, scope, archive fetch, capture ledger. A library, not an application.</description>
+
+	<properties>
+		<!-- Part of the capture application, not of the published contract (#246). -->
+		<maven.deploy.skip>true</maven.deploy.skip>
+	</properties>
+
+	<!--
+		A plain jar, deliberately. There is one Spring Boot application in this
+		repository and it is `backend` (PRD #73: one process, one deployable).
+		The beans here join that context; nothing in this module boots one, and
+		no spring-boot-maven-plugin repackages it.
+	-->
+
+	<dependencies>
+		<!-- The migrations, loaded from classpath:db/acquisition. Their own
+		     artifact since #246 so they can be published without this module. -->
+		<dependency>
+			<groupId>com.stucray</groupId>
+			<artifactId>raptor-schema</artifactId>
+		</dependency>
+		<!-- bzip2 framing for the historic BASIC files. Framing, not parsing: the
+		     loader splits a vendor file into messages and never reads them. -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-compress</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-batch</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jdbc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+		<!-- webmvc, not webflux: the Betfair stream is a raw TLS socket carrying
+		     newline-delimited JSON, so one blocking read loop on a virtual
+		     thread is the correct model and reactive buys nothing. The web
+		     surface here is only the localhost ops API. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<!-- compile scope: RawWriter drives the driver's COPY API directly.
+			     Same reason paddock's BulkCopyImporter needs it. -->
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.modulith</groupId>
+			<artifactId>spring-modulith-api</artifactId>
+		</dependency>
+		<!--
+			NOT spring-boot-docker-compose. paddock owns the shared Postgres
+			lifecycle question (see the plan's open item 6); a resident service
+			must never be able to stop the database holding its own system of
+			record. Bring the DB up out of band.
+		-->
+
+		<dependency>
+			<groupId>org.springframework.modulith</groupId>
+			<artifactId>spring-modulith-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.batch</groupId>
+			<artifactId>spring-batch-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jdbc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.awaitility</groupId>
+			<artifactId>awaitility</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<profiles>
+		<!--
+			The full replay gate: every capture under the custody root, through the
+			real read loop, the real queue and the real writer, into a real
+			PostgreSQL. Not part of `verify`, because CI has no corpus — the
+			every-PR tier replays the four synthetic captures in
+			src/test/resources/capture-sample instead (#303). This profile also
+			runs the three shape manifests that hold the synthetic samples
+			honest (#303, #304): CaptureShapeManifestIT (the capture corpus),
+			BasicShapeManifestIT (the whole historic BASIC corpus, a few
+			minutes) and RestShapeManifestIT (the REST captures in custody).
+
+				RAPTOR_DATA_ROOT=/path/to/custody ./mvnw -pl capture -Preplay verify
+		-->
+		<profile>
+			<id>replay</id>
+			<properties>
+				<raptor.replay.corpus>${env.RAPTOR_DATA_ROOT}/betfair-live/captured</raptor.replay.corpus>
+				<raptor.replay.historic>${env.RAPTOR_DATA_ROOT}/betfair-historic/raw/xds_nfs/edp_processed/BASIC</raptor.replay.historic>
+				<raptor.replay.rest>${env.RAPTOR_DATA_ROOT}/betfair-rest/captured</raptor.replay.rest>
+			</properties>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-failsafe-plugin</artifactId>
+						<configuration>
+							<systemPropertyVariables>
+								<raptor.replay.corpus>${raptor.replay.corpus}</raptor.replay.corpus>
+								<raptor.replay.historic>${raptor.replay.historic}</raptor.replay.historic>
+								<raptor.replay.rest>${raptor.replay.rest}</raptor.replay.rest>
+							</systemPropertyVariables>
+						</configuration>
+						<executions>
+							<execution>
+								<goals>
+									<goal>integration-test</goal>
+									<goal>verify</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
+	</profiles>
+
+</project>

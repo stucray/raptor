@@ -1,0 +1,11 @@
+# The parity manifest is compared byte-for-byte against the Java side's output.
+# Never let git rewrite its line endings.
+parity/*.csv -text
+parity/*.csv.gz binary
+
+# Committed parse inputs and the digests they are checked against. The inputs
+# are verbatim wire bytes and the digests are compared byte-for-byte, so line
+# endings must never be rewritten on either.
+wire/src/test/resources/**/*.bz2 binary
+wire/src/test/resources/**/*.ndjson.gz binary
+wire/src/test/resources/**/expected-digests.csv -text

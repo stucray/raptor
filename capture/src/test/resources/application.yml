@@ -1,0 +1,33 @@
+# Test-only configuration for the acquisition module.
+#
+# This module ships no application.yml of its own: it is a library, and a second
+# application.yml on the classpath would compete with backend's. The settings the
+# production application needs live in backend's; the ones its own tests need
+# live here.
+spring:
+  flyway:
+    # Boot's auto-configured instance is off in this module's tests: there are no
+    # read-side migrations here, and leaving it on would give the tests a
+    # different migration path from production. AcquisitionMigrations is what
+    # runs in both.
+    enabled: false
+  batch:
+    job:
+      # Jobs are launched deliberately, never by merely starting the context.
+      enabled: false
+
+raptor:
+  recorder:
+    spill:
+      # Under target/, so a test that spills leaves nothing behind a clean build
+      # would not remove. Tests that assert on spill contents point this at their
+      # own @TempDir instead.
+      directory: ${project.build.directory:target}/spill
+  football-archive:
+    sweep:
+      # Never in a test. The sweep reaches the public internet and writes into
+      # the custody root, and a test that boots the close-out chain would do both
+      # — against the real archive and the real custody tree. Tests that exercise
+      # the job start it themselves, pointed at a fake upstream and a temporary
+      # directory.
+      enabled: false

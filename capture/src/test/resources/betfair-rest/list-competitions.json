@@ -1,0 +1,58 @@
+[
+  {
+    "competition": {
+      "id": "9000101",
+      "name": "German Bundesliga"
+    },
+    "competitionRegion": "DEU",
+    "marketCount": 41
+  },
+  {
+    "competition": {
+      "id": "9000102",
+      "name": "Italian Serie A"
+    },
+    "competitionRegion": "ITA",
+    "marketCount": 38
+  },
+  {
+    "competition": {
+      "id": "9000103",
+      "name": "Spanish La Liga"
+    },
+    "competitionRegion": "ESP",
+    "marketCount": 52
+  },
+  {
+    "competition": {
+      "id": "9000104",
+      "name": "English Premier League"
+    },
+    "competitionRegion": "GBR",
+    "marketCount": 47
+  },
+  {
+    "competition": {
+      "id": "9000105",
+      "name": "English Sky Bet Championship"
+    },
+    "competitionRegion": "GBR",
+    "marketCount": 60
+  },
+  {
+    "competition": {
+      "id": "9000106",
+      "name": "Czech 3 Liga"
+    },
+    "competitionRegion": "CZE",
+    "marketCount": 12
+  },
+  {
+    "competition": {
+      "id": "9000107",
+      "name": "Bahraini Premier"
+    },
+    "competitionRegion": "BHR",
+    "marketCount": 9
+  }
+]

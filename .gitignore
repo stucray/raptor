@@ -1,0 +1,17 @@
+target/
+node_modules/
+dist/
+.angular/
+.env
+.envrc
+.DS_Store
+*.log
+.idea/
+*.iml
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/.gradle-enterprise/
+
+*.spill.ndjson
+
+__pycache__/
+*.pyc

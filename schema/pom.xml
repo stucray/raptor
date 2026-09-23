@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>com.stucray</groupId>
+		<artifactId>raptor-parent</artifactId>
+		<version>0.1.0-SNAPSHOT</version>
+		<relativePath>../pom.xml</relativePath>
+	</parent>
+	<artifactId>raptor-schema</artifactId>
+	<description>The raw, query and batch Flyway migrations, and nothing else. Published.</description>
+
+	<!--
+		A jar of SQL, deliberately with no code and no dependencies (#246).
+
+		The migrations lived in `acquisition` until analysis moved out of paddock
+		(PRD #245). `query` is now a published contract, and a consumer's tests
+		need the real shape of it: the schema is built from these files, not from
+		a second description of them. Publishing `acquisition` itself would hand
+		the consumer the recorder, the ingest and the projection jobs to get at a
+		directory of SQL, so the directory became its own artifact instead.
+
+		`acquisition` depends on this module and still loads the files from
+		`classpath:db/acquisition`, so moving them changed no behaviour.
+
+		ONE LOCATION. `db/acquisition` is the raw/query/batch line, and it is
+		paddock's own: AcquisitionMigrations applies exactly this directory to the
+		live database.
+
+		There was a second, `db/contract`, carrying a copy of `team_alias`'s DDL
+		for consumers (#263). It went in #315, when overround-analysis took the
+		table over as `analysis.team_alias`, mastered and migrated in its own
+		repository. Releases up to and including the one that shipped it still
+		contain the file.
+
+		For consumers: apply `db/acquisition` to a TEST database only, with the
+		same settings AcquisitionMigrations uses: schemas raw, query, batch;
+		default schema query; history table flyway_schema_history_acquisition;
+		createSchemas; and the `readerPassword` and `analysisPassword`
+		placeholders, which V6 and V27 need to give paddock_reader and
+		overround_analysis their logins.
+
+		paddock's own database is migrated by paddock and nobody else.
+	-->
+</project>

@@ -1,0 +1,300 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/>
+	</parent>
+	<groupId>com.stucray</groupId>
+	<artifactId>raptor-parent</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>pom</packaging>
+
+	<!--
+		Three modules, built in this order:
+
+		  schema   raptor-schema: the raw/query/batch migrations and nothing
+		           else, so they can be published without the code around them.
+		  capture  raptor-capture: the capture code, a plain library. Its beans
+		           join the application's context; nothing here boots one.
+		  app      raptor: the one Spring Boot application.
+
+		There is no parser anywhere in this build, and that is the point:
+		raptor stores each source verbatim and never interprets it (CHARTER.md).
+	-->
+	<modules>
+		<module>schema</module>
+		<module>capture</module>
+		<module>app</module>
+	</modules>
+
+	<properties>
+		<java.version>26</java.version>
+		<maven.compiler.source>26</maven.compiler.source>
+		<maven.compiler.target>26</maven.compiler.target>
+		<error-prone.version>2.49.0</error-prone.version>
+		<nullaway.version>0.13.4</nullaway.version>
+		<maven-pmd-plugin.version>3.28.0</maven-pmd-plugin.version>
+		<maven-jxr-plugin.version>3.6.0</maven-jxr-plugin.version>
+		<!--
+			maven-pmd-plugin 3.28.0 bundles PMD 7.17, which doesn't support
+			Java 24+ classfiles. Override to 7.21+ via plugin <dependencies>
+			below. Required for Java 26.
+		-->
+		<pmd.version>7.24.0</pmd.version>
+		<spring-modulith.version>2.1.0</spring-modulith.version>
+		<!-- Not managed by the Boot BOM. 1.28.0 is current (2025-07-27). -->
+		<commons-compress.version>1.28.0</commons-compress.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.modulith</groupId>
+				<artifactId>spring-modulith-bom</artifactId>
+				<version>${spring-modulith.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>com.stucray</groupId>
+				<artifactId>raptor-schema</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.stucray</groupId>
+				<artifactId>raptor-capture</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.apache.commons</groupId>
+				<artifactId>commons-compress</artifactId>
+				<version>${commons-compress.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<!--
+		PUBLISHED: raptor-parent (this POM) and raptor-schema, the contract
+		overround-analysis builds against (#320 publishes it). raptor-capture and
+		raptor are the application, not a contract, and set maven.deploy.skip.
+		GitHub Packages needs a token even to download a public package.
+	-->
+	<distributionManagement>
+		<repository>
+			<id>github</id>
+			<name>GitHub Packages</name>
+			<url>https://maven.pkg.github.com/stucray/raptor</url>
+		</repository>
+	</distributionManagement>
+
+	<build>
+		<plugins>
+			<!--
+				Error Prone + NullAway run in-process under the Maven JVM.
+				Required JDK exports/opens live in .mvn/jvm.config so they're
+				applied to the in-process compile (a -J prefix in <compilerArgs>
+				would only forward to a forked javac and silently do nothing).
+
+				NullAway AnnotatedPackages=com.stucray covers every sub-package.
+				Off on test compile — tests construct fixtures with null
+				placeholders where a real null would already trip the assertion.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<showWarnings>true</showWarnings>
+					<failOnWarning>false</failOnWarning>
+					<compilerArgs>
+						<arg>-XDcompilePolicy=simple</arg>
+						<arg>--should-stop=ifError=FLOW</arg>
+						<arg>-XDaddTypeAnnotationsToSymbol=true</arg>
+						<arg>-Xplugin:ErrorProne -XepDisableWarningsInGeneratedCode -Xep:NullAway:ERROR -XepOpt:NullAway:JSpecifyMode=true -XepOpt:NullAway:AnnotatedPackages=com.stucray -XepOpt:NullAway:ExcludedFieldAnnotations=org.springframework.beans.factory.annotation.Autowired,org.mockito.Mock,org.mockito.InjectMocks</arg>
+					</compilerArgs>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>com.google.errorprone</groupId>
+							<artifactId>error_prone_core</artifactId>
+							<version>${error-prone.version}</version>
+						</path>
+						<path>
+							<groupId>com.uber.nullaway</groupId>
+							<artifactId>nullaway</artifactId>
+							<version>${nullaway.version}</version>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+				<executions>
+					<execution>
+						<id>default-testCompile</id>
+						<configuration>
+							<compilerArgs>
+								<arg>-XDcompilePolicy=simple</arg>
+								<arg>--should-stop=ifError=FLOW</arg>
+								<arg>-XDaddTypeAnnotationsToSymbol=true</arg>
+								<arg>-Xplugin:ErrorProne -XepDisableWarningsInGeneratedCode -Xep:NullAway:OFF -XepOpt:NullAway:AnnotatedPackages=com.stucray</arg>
+							</compilerArgs>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!--
+				JaCoCo agent + per-module report. Parent (pom packaging) has
+				nothing to instrument; the report execution no-ops there.
+			-->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>0.8.14</version>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>test</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!--
+				PMD aggregated across the reactor; report-only (skipPmdError).
+				Parent-only via <inherited>false</inherited>. Output lands at
+				./target/pmd.xml and feeds render-pmd-report.py below.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-pmd-plugin</artifactId>
+				<version>${maven-pmd-plugin.version}</version>
+				<configuration>
+					<rulesets>
+						<ruleset>${maven.multiModuleProjectDirectory}/pmd-ruleset.xml</ruleset>
+					</rulesets>
+					<format>xml</format>
+					<linkXRef>true</linkXRef>
+					<printFailingErrors>true</printFailingErrors>
+					<skipPmdError>true</skipPmdError>
+					<includeTests>false</includeTests>
+				</configuration>
+				<executions>
+					<execution>
+						<id>pmd-report</id>
+						<inherited>false</inherited>
+						<phase>verify</phase>
+						<goals>
+							<goal>aggregate-pmd</goal>
+						</goals>
+					</execution>
+				</executions>
+				<dependencies>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-core</artifactId>
+						<version>${pmd.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-java</artifactId>
+						<version>${pmd.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-javascript</artifactId>
+						<version>${pmd.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-jsp</artifactId>
+						<version>${pmd.version}</version>
+					</dependency>
+				</dependencies>
+			</plugin>
+
+			<!--
+				Source cross-reference for PMD's HTML drilldown. Parent-only.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jxr-plugin</artifactId>
+				<version>${maven-jxr-plugin.version}</version>
+				<executions>
+					<execution>
+						<id>jxr-source-xref</id>
+						<inherited>false</inherited>
+						<phase>verify</phase>
+						<goals>
+							<goal>aggregate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!--
+				Render the aggregated PMD XML to docs/reports/code-quality.{md,json}.
+				Must run AFTER maven-pmd-plugin in the verify phase — plugins
+				within a phase execute in declaration order. Parent-only.
+			-->
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>exec-maven-plugin</artifactId>
+				<version>3.5.0</version>
+				<executions>
+					<!-- raptor is public: no Betfair data, no real market id and no
+					     personal detail may be committed. First thing in every build,
+					     locally and in CI, before anything compiles. -->
+					<execution>
+						<id>scan-no-betfair-data</id>
+						<inherited>false</inherited>
+						<phase>validate</phase>
+						<goals>
+							<goal>exec</goal>
+						</goals>
+						<configuration>
+							<executable>python3</executable>
+							<workingDirectory>${project.basedir}</workingDirectory>
+							<arguments>
+								<argument>scripts/scan-no-betfair-data.py</argument>
+								<argument>.</argument>
+							</arguments>
+						</configuration>
+					</execution>
+					<execution>
+						<id>render-pmd-report</id>
+						<inherited>false</inherited>
+						<phase>verify</phase>
+						<goals>
+							<goal>exec</goal>
+						</goals>
+						<configuration>
+							<executable>python3</executable>
+							<workingDirectory>${project.basedir}</workingDirectory>
+							<arguments>
+								<argument>scripts/render-pmd-report.py</argument>
+								<argument>--in</argument>
+								<argument>target/pmd.xml</argument>
+								<argument>--out-md</argument>
+								<argument>docs/reports/code-quality.md</argument>
+								<argument>--out-json</argument>
+								<argument>docs/reports/code-quality.json</argument>
+								<argument>--ruleset</argument>
+								<argument>pmd-ruleset.xml</argument>
+							</arguments>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

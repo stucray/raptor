@@ -1,0 +1,38 @@
+{
+  "list-competitions" : {
+    "paths" : [ "$ : array", "[] : object", "[].competition : object", "[].competition.id : string", "[].competition.name : string", "[].competitionRegion : string", "[].marketCount : number" ],
+    "keySets" : {
+      "[]" : [ "competition,competitionRegion,marketCount" ],
+      "[].competition" : [ "id,name" ]
+    },
+    "values" : { }
+  },
+  "list-market-catalogue" : {
+    "paths" : [ "$ : array", "[] : object", "[].competition : object", "[].competition.id : string", "[].competition.name : string", "[].description : object", "[].description.betDelayModels : array", "[].description.betDelayModels[] : string", "[].description.bettingType : string", "[].description.bspMarket : boolean", "[].description.discountAllowed : boolean", "[].description.marketBaseRate : number", "[].description.marketTime : string", "[].description.marketType : string", "[].description.persistenceEnabled : boolean", "[].description.priceLadderDescription : object", "[].description.priceLadderDescription.type : string", "[].description.regulator : string", "[].description.rules : string", "[].description.rulesHasDate : boolean", "[].description.suspendTime : string", "[].description.turnInPlayEnabled : boolean", "[].description.wallet : string", "[].event : object", "[].event.countryCode : string", "[].event.id : string", "[].event.name : string", "[].event.openDate : string", "[].event.timezone : string", "[].marketId : string", "[].marketName : string", "[].marketStartTime : string", "[].totalMatched : number" ],
+    "keySets" : {
+      "[]" : [ "competition,description,event,marketId,marketName,marketStartTime,totalMatched" ],
+      "[].competition" : [ "id,name" ],
+      "[].description" : [ "betDelayModels,bettingType,bspMarket,discountAllowed,marketBaseRate,marketTime,marketType,persistenceEnabled,priceLadderDescription,regulator,rules,rulesHasDate,suspendTime,turnInPlayEnabled,wallet" ],
+      "[].event" : [ "countryCode,id,name,openDate,timezone" ]
+    },
+    "values" : {
+      "[].description.bettingType" : [ "ODDS" ],
+      "[].description.marketType" : [ "MATCH_ODDS", "OVER_UNDER_15", "OVER_UNDER_25", "OVER_UNDER_35" ],
+      "[].description.priceLadderDescription.type" : [ "CLASSIC" ],
+      "[].event.countryCode" : [ "GB" ],
+      "[].event.timezone" : [ "GMT" ]
+    }
+  },
+  "list-market-book" : {
+    "paths" : [ "$ : array", "[] : object", "[].betDelay : number", "[].betDelayModels : array", "[].betDelayModels[] : string", "[].bspReconciled : boolean", "[].complete : boolean", "[].crossMatching : boolean", "[].inplay : boolean", "[].isMarketDataDelayed : boolean", "[].lastMatchTime : string", "[].marketId : string", "[].numberOfActiveRunners : number", "[].numberOfRunners : number", "[].numberOfWinners : number", "[].runners : array", "[].runnersVoidable : boolean", "[].runners[] : object", "[].runners[].handicap : number", "[].runners[].lastPriceTraded : number", "[].runners[].selectionId : number", "[].runners[].status : string", "[].runners[].totalMatched : number", "[].status : string", "[].totalAvailable : number", "[].totalMatched : number", "[].version : number" ],
+    "keySets" : {
+      "[]" : [ "betDelay,betDelayModels,bspReconciled,complete,crossMatching,inplay,isMarketDataDelayed,lastMatchTime,marketId,numberOfActiveRunners,numberOfRunners,numberOfWinners,runners,runnersVoidable,status,totalAvailable,totalMatched,version", "betDelay,betDelayModels,bspReconciled,complete,crossMatching,inplay,isMarketDataDelayed,marketId,numberOfActiveRunners,numberOfRunners,numberOfWinners,runners,runnersVoidable,status,totalAvailable,totalMatched,version" ],
+      "[].runners[]" : [ "handicap,lastPriceTraded,selectionId,status,totalMatched", "handicap,selectionId,status" ]
+    },
+    "values" : {
+      "[].betDelayModels[]" : [ "PASSIVE" ],
+      "[].runners[].status" : [ "ACTIVE", "LOSER", "WINNER" ],
+      "[].status" : [ "CLOSED", "OPEN" ]
+    }
+  }
+}

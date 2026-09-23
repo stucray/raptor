@@ -1,0 +1,31 @@
+# Main CI pipeline. Thin caller — the build/test/static-analysis behaviour
+# lives in stucray/workflows/.github/workflows/ci-spring-boot-maven.yml.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+  workflow_dispatch:
+
+jobs:
+  ci:
+    uses: stucray/workflows/.github/workflows/ci-spring-boot-maven.yml@v1
+    # Optional — uncomment and customise if your tests need project-specific
+    # secrets (e.g. an encryption key for tests that exercise crypto code).
+    # secrets:
+    #   test_env_json: '{"YOUR_PROJECT_SECRET":"${{ secrets.YOUR_PROJECT_SECRET_TEST }}"}'

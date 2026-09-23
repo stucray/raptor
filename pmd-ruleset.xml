@@ -1,0 +1,124 @@
+<?xml version="1.0"?>
+<ruleset name="Code-quality ruleset"
+    xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 http://pmd.sourceforge.net/ruleset_2_0_0.xsd">
+
+    <description>
+        PMD is configured as a reporting tool, not a gate — findings are
+        surfaced in `docs/reports/code-quality.{md,json}`, regenerated
+        automatically by `mvn verify`, and the build does not fail on
+        findings. Rules here exist to inform refactoring, not block PRs.
+        See `docs/process/code-quality.md` for the regen flow.
+
+        Categories included: Complexity (design.xml subset), Best Practices,
+        Error Prone (PMD's, distinct from the Error Prone compiler plugin),
+        and Performance. Per-category exclusions and their rationale are
+        documented inline against each &lt;rule ref=…&gt; block below. The
+        exclusions encode noise patterns observed across multiple Spring
+        Boot projects; remove an exclusion if a particular rule is signal
+        in your codebase.
+
+        Categories evaluated and dropped:
+        - Documentation — produces hundreds of findings (CommentRequired,
+          CommentSize) that are fundamentally at odds with a "default to
+          no comments; explain only the non-obvious WHY" convention.
+
+        Categories deferred (unevaluated):
+        - Multithreading — niche; revisit if concurrency-heavy code lands.
+        - Security — minimal PMD coverage; better served by dedicated
+          tooling (e.g. dependency-check).
+        - Code Style — cosmetic; defer indefinitely. Style is enforced by
+          formatter conventions, not PMD.
+    </description>
+
+    <!-- "Method does too much" signals -->
+    <rule ref="category/java/design.xml/CognitiveComplexity"/>
+    <rule ref="category/java/design.xml/CyclomaticComplexity"/>
+    <rule ref="category/java/design.xml/NPathComplexity"/>
+    <rule ref="category/java/design.xml/NcssCount"/>
+    <rule ref="category/java/design.xml/ExcessiveParameterList"/>
+
+    <!-- "Class does too much" signals -->
+    <rule ref="category/java/design.xml/GodClass"/>
+    <rule ref="category/java/design.xml/TooManyFields"/>
+    <rule ref="category/java/design.xml/TooManyMethods"/>
+    <rule ref="category/java/design.xml/ExcessivePublicCount"/>
+
+    <!--
+        Forgotten-code + small-correctness signals. Three rules excluded
+        because findings are dominated by pattern-specific noise rather
+        than real refactoring opportunities:
+
+        - AbstractClassWithoutAbstractMethod: matches Jackson `*Mixin`
+          classes whose abstractness is a marker (never instantiated;
+          Jackson reads their annotations). The rule doesn't model this.
+        - GuardLogStatement: slf4j's parameterised logging is already
+          lazy, so wrapping `log.x("foo {}", v)` in `isXEnabled()` guards
+          adds boilerplate without measurable benefit.
+        - LooseCoupling: `EnumMap` / `ConcurrentHashMap` are deliberately
+          declared as their concrete types because the semantics
+          (enum-keyed iteration order, thread-safety) are part of the
+          contract; downgrading to `Map` would silently lose them.
+    -->
+    <rule ref="category/java/bestpractices.xml">
+        <exclude name="AbstractClassWithoutAbstractMethod"/>
+        <exclude name="GuardLogStatement"/>
+        <exclude name="LooseCoupling"/>
+    </rule>
+
+    <!--
+        Bug-pattern detection. Distinct from the Error Prone compiler
+        plugin already wired into maven-compiler-plugin — different rules,
+        different mechanism. PMD's Error Prone catches latent bugs and
+        footguns the compiler plugin doesn't (e.g. AvoidLiteralsInIfCondition,
+        UseLocaleWithCaseConversions, UseProperClassLoader).
+
+        Six rules excluded because findings are dominated by language /
+        framework-pattern noise:
+
+        - AvoidFieldNameMatchingMethodName: Java records and bean
+          accessors deliberately match field name to auto-generated method
+          name (it's a language feature, not a smell).
+        - MissingSerialVersionUID + NonSerializableClass: Spring exception
+          classes and Spring Security domain types implement Serializable
+          for framework reasons; in apps with no cross-JVM serialization
+          story, the rules' premise doesn't apply.
+        - ReplaceJavaUtilDate: Spring Security's RememberMeServices API
+          forces `java.util.Date` on implementors; can't change the API.
+        - AvoidDuplicateLiterals: most matches are template-binding
+          attribute names and Spring redirect prefixes; signal-to-noise
+          too low for routine surfacing. Re-enable for a churning-strings
+          refactor.
+        - AvoidCatchingGenericException: deliberate boundary safety-nets
+          (filter doFilterInternal, scheduled jobs, audit dispatch) match
+          this rule by design; it doesn't model the
+          "absorb-anything-from-below-here" pattern.
+    -->
+    <rule ref="category/java/errorprone.xml">
+        <exclude name="AvoidCatchingGenericException"/>
+        <exclude name="AvoidDuplicateLiterals"/>
+        <exclude name="AvoidFieldNameMatchingMethodName"/>
+        <exclude name="MissingSerialVersionUID"/>
+        <exclude name="NonSerializableClass"/>
+        <exclude name="ReplaceJavaUtilDate"/>
+    </rule>
+
+    <!--
+        Performance hot-path signals. PMD's Performance category is a
+        mixed bag — some rules catch real footguns (`AddEmptyString` flags
+        `"" + first + …`-style concatenation chains), others are
+        cargo-culted micro-optimisation noise.
+
+        One rule excluded outright:
+
+        - AvoidInstantiatingObjectsInLoops: heuristic too broad.
+          Per-iteration allocations the JIT escape-analyses away
+          (e.g. `computeIfAbsent` lookup keys, per-event objects, builder
+          DTOs) trigger this. Premise pre-dates modern GC + escape
+          analysis.
+    -->
+    <rule ref="category/java/performance.xml">
+        <exclude name="AvoidInstantiatingObjectsInLoops"/>
+    </rule>
+</ruleset>

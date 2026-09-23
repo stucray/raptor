@@ -1,0 +1,66 @@
+[
+  {
+    "betDelay": 5,
+    "betDelayModels": [
+      "PASSIVE"
+    ],
+    "bspReconciled": false,
+    "complete": true,
+    "crossMatching": false,
+    "inplay": true,
+    "isMarketDataDelayed": false,
+    "marketId": "1.900005101",
+    "numberOfActiveRunners": 0,
+    "numberOfRunners": 2,
+    "numberOfWinners": 1,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "selectionId": 9000251,
+        "status": "WINNER"
+      },
+      {
+        "handicap": 0.0,
+        "selectionId": 9000252,
+        "status": "LOSER"
+      }
+    ],
+    "runnersVoidable": false,
+    "status": "CLOSED",
+    "totalAvailable": 0.0,
+    "totalMatched": 0.0,
+    "version": 7500100001
+  },
+  {
+    "betDelay": 5,
+    "betDelayModels": [
+      "PASSIVE"
+    ],
+    "bspReconciled": false,
+    "complete": true,
+    "crossMatching": false,
+    "inplay": true,
+    "isMarketDataDelayed": false,
+    "marketId": "1.900005102",
+    "numberOfActiveRunners": 0,
+    "numberOfRunners": 2,
+    "numberOfWinners": 1,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "selectionId": 9000351,
+        "status": "WINNER"
+      },
+      {
+        "handicap": 0.0,
+        "selectionId": 9000352,
+        "status": "LOSER"
+      }
+    ],
+    "runnersVoidable": false,
+    "status": "CLOSED",
+    "totalAvailable": 0.0,
+    "totalMatched": 0.0,
+    "version": 7500100002
+  }
+]
