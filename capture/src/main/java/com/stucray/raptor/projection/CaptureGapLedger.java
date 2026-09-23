@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Read from the projection rather than from {@code raw}, which is where the
  * recorder writes gaps, because the question needs both halves: the intervals
- * and what was on at the time. {@code query.market_scope} carries
+ * and what was on at the time. {@code ledger.market_scope} carries
  * {@code in_play_since}, and {@code CaptureLedgerRefresh} keeps both tables
  * within five minutes of the write side — so a suspend is reportable within a
  * refresh of the wake rather than waiting for the nightly close-out.
@@ -75,20 +75,20 @@ class CaptureGapLedger implements GapHistory {
 	private static final String LAST_GAP_SQL = """
 			select g.ended_at, g.cause,
 				round(extract(epoch from (g.ended_at - g.started_at)))::bigint as seconds,
-				(select count(*) from query.market_scope s
+				(select count(*) from ledger.market_scope s
 					where s.first_seen_at < g.ended_at
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end) as markets,
-				(select count(*) from query.market_scope s
+				(select count(*) from ledger.market_scope s
 					where s.in_play_since is not null
 						and g.ended_at > s.in_play_since
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end) as live
-			from query.capture_gap g
+			from ledger.capture_gap g
 			where g.started_at > :since
 				and g.ended_at - g.started_at >= cast(:floor as interval)
 				and exists (
-					select 1 from query.market_scope s
+					select 1 from ledger.market_scope s
 					where s.in_play_since is not null
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end

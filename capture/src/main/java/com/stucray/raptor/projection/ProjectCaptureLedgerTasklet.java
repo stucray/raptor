@@ -51,11 +51,11 @@ class ProjectCaptureLedgerTasklet implements Tasklet {
 				chunkContext.getStepContext().getJobParameters()
 						.getOrDefault(ProjectionRun.FULL_PARAM, "false")));
 
-		long projectionId = writer.begin(ProjectCaptureLedgerJobConfig.JOB_NAME,
+		long ledgerRunId = writer.begin(ProjectCaptureLedgerJobConfig.JOB_NAME,
 				full ? "all" : "live",
 				chunkContext.getStepContext().getStepExecution().getJobExecutionId());
-		CaptureLedgerWriter.Written written = writer.write(projectionId, full);
-		writer.complete(projectionId);
+		CaptureLedgerWriter.Written written = writer.write(ledgerRunId, full);
+		writer.complete(ledgerRunId);
 
 		contribution.incrementWriteCount(
 				written.sessions() + written.scopedMarkets() + written.gaps());

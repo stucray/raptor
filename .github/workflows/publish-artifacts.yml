@@ -1,0 +1,81 @@
+# Publishes raptor's contract artifacts to GitHub Packages (Maven) on each
+# release tag:
+#
+#   raptor-parent  — the POM raptor-schema takes its versions from
+#   raptor-schema  — the raw/query/ledger/batch migrations, as SQL
+#
+# They are what stucray/overround-analysis builds its test schema from (#320).
+# raptor-capture and raptor set maven.deploy.skip and are never published.
+#
+# Not a thin caller of stucray/workflows, because nothing there deploys a Maven
+# artifact yet; the shared release workflow creates the tag, and the tag push
+# (made with the release PAT, so it does trigger workflows) runs this.
+
+name: Publish artifacts
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version_ref:
+        description: 'Republish a past release: tag (e.g. `v0.1.0`). Snapshots are refused.'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-artifacts-${{ inputs.version_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.version_ref || github.ref }}
+
+      - name: Read Java version from pom.xml
+        id: jv
+        run: |
+          set -euo pipefail
+          v=$(grep -m1 '<java.version>' pom.xml | sed 's/.*>\(.*\)<.*/\1/')
+          [ -n "$v" ] || { echo "::error::Could not find <java.version> in pom.xml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # setup-java writes a settings.xml server `github` authenticated by
+      # GITHUB_TOKEN, matching <distributionManagement> in the root POM.
+      - name: Set up JDK (liberica)
+        uses: actions/setup-java@v5
+        with:
+          distribution: liberica
+          java-version: ${{ steps.jv.outputs.version }}
+          cache: maven
+
+      # A release version and nothing else. A consumer pins an exact version;
+      # a SNAPSHOT in the registry is a moving target with the same name.
+      - name: Refuse snapshots
+        run: |
+          set -euo pipefail
+          v=$(./mvnw -B -ntp help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "Publishing version $v"
+          [[ "$v" != *-SNAPSHOT ]] || { echo "::error::$v is a snapshot; publish from a release tag."; exit 1; }
+
+      # -am brings in raptor-parent. Tests are skipped because the release
+      # workflow ran the full verify on this exact commit. The PMD/JXR/report
+      # executions on the parent are skipped because a partial reactor would
+      # render a partial report, and CI=true fails on that drift (the snapshot
+      # gate in scripts/render-pmd-report.py).
+      - name: Deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          ./mvnw -B -ntp deploy
+          -pl schema -am
+          -DskipTests
+          -Dpmd.skip=true -Dmaven.jxr.skip=true -Dexec.skip=true

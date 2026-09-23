@@ -76,10 +76,10 @@ class ProjectCaptureLedgerIntegrationTest {
 		assertThat(scopeMessages("1.1")).as("received two messages").isEqualTo(2);
 		assertThat(scopeMessages("1.9")).as("subscribed and silent: a lost fixture").isZero();
 		assertThat(count("""
-				select count(*) from query.market_scope
+				select count(*) from ledger.market_scope
 				where state = 'DONE' and requested and messages = 0"""))
 				.isEqualTo(1);
-		assertThat(count("select count(*) from query.market_scope")).isEqualTo(3);
+		assertThat(count("select count(*) from ledger.market_scope")).isEqualTo(3);
 	}
 
 	@Test
@@ -120,7 +120,7 @@ class ProjectCaptureLedgerIntegrationTest {
 		assertThat(one("messages", empty)).isZero();
 		assertThat(one("gap_count", empty)).isZero();
 		assertThat(instant("first_message_at", empty)).isNull();
-		assertThat(jdbc.sql("select source_key from query.capture_session where session_id = ?")
+		assertThat(jdbc.sql("select source_key from ledger.capture_session where session_id = ?")
 				.param(empty).query(String.class).single())
 				.as("the era is legible: an imported session kept its run key")
 				.isEqualTo("run-x");
@@ -137,7 +137,7 @@ class ProjectCaptureLedgerIntegrationTest {
 	void doesNotBelieveTheRecordersOwnCount() throws Exception {
 		assertThat(run().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
-		assertThat(jdbc.sql("select exit_detail from query.capture_session where session_id = ?")
+		assertThat(jdbc.sql("select exit_detail from ledger.capture_session where session_id = ?")
 				.param(recorded).query(String.class).single())
 				.contains("99999");
 		assertThat(one("messages", recorded)).isEqualTo(3);
@@ -149,8 +149,8 @@ class ProjectCaptureLedgerIntegrationTest {
 		assertThat(run().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 		assertThat(run().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
-		assertThat(count("select count(*) from query.capture_session")).isEqualTo(2);
-		assertThat(count("select count(*) from query.projection where job_name = '"
+		assertThat(count("select count(*) from ledger.capture_session")).isEqualTo(2);
+		assertThat(count("select count(*) from ledger.ledger_run where job_name = '"
 				+ ProjectCaptureLedgerJobConfig.JOB_NAME + "' and completed_at is not null"))
 				.as("both runs are in the ledger of projections")
 				.isEqualTo(2);
@@ -160,7 +160,7 @@ class ProjectCaptureLedgerIntegrationTest {
 	 * The second run re-derives the open session and leaves the closed one alone
 	 * (#261).
 	 *
-	 * <p>Asserted on {@code projection_id} rather than on timing or row counts,
+	 * <p>Asserted on {@code ledger_run_id} rather than on timing or row counts,
 	 * because those cannot tell "skipped it" from "recomputed it to the same
 	 * value" — and an incremental projection that silently still scans everything
 	 * is precisely the regression worth catching. {@code recorded} closed ten days
@@ -276,7 +276,7 @@ class ProjectCaptureLedgerIntegrationTest {
 	}
 
 	private long scopeMessages(String marketId) {
-		Long value = jdbc.sql("select messages from query.market_scope where market_id = ?")
+		Long value = jdbc.sql("select messages from ledger.market_scope where market_id = ?")
 				.param(marketId).query(Long.class).single();
 		return value == null ? 0 : value;
 	}
@@ -346,14 +346,14 @@ class ProjectCaptureLedgerIntegrationTest {
 	}
 
 	private long one(String column, long sessionId) {
-		Long value = jdbc.sql("select " + column + " from query.capture_session where session_id = ?")
+		Long value = jdbc.sql("select " + column + " from ledger.capture_session where session_id = ?")
 				.param(sessionId).query(Long.class).single();
 		return value == null ? 0 : value;
 	}
 
 	private Instant instant(String column, long sessionId) {
 		OffsetDateTime value = jdbc.sql(
-						"select " + column + " from query.capture_session where session_id = ?")
+						"select " + column + " from ledger.capture_session where session_id = ?")
 				.param(sessionId).query(OffsetDateTime.class).optional().orElse(null);
 		return value == null ? null : value.toInstant();
 	}
@@ -365,7 +365,7 @@ class ProjectCaptureLedgerIntegrationTest {
 
 	/** The projection run that last derived this session's row. */
 	private long projectionOf(long sessionId) {
-		return one("projection_id", sessionId);
+		return one("ledger_run_id", sessionId);
 	}
 
 	private JobExecution run() throws Exception {

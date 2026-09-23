@@ -61,7 +61,7 @@ public class DatabaseReset implements TestExecutionListener {
 			join pg_namespace n on n.oid = c.relnamespace
 			where c.relkind in ('r', 'p')
 			  and not c.relispartition
-			  and n.nspname in ('raw', 'query', 'batch', 'public')
+			  and n.nspname in ('raw', 'query', 'ledger', 'batch', 'public')
 			  and c.relname not like 'flyway_schema_history%'""";
 
 	@Override
