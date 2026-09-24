@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  * same {@code capture} group, so one curl answers both halves.
  *
  * <p>The health screen shows these same counts, and this is not that: the
- * screen reads {@code query.market_scope}, which is a projection refreshed on a
+ * screen reads {@code ledger.market_scope}, which is a projection refreshed on a
  * timer, and this reads the live ledger the recorder is subscribing from. A
  * count that trails by five minutes is the right answer for a morning's
  * browsing and the wrong one for the endpoint an operator curls at kickoff.

@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * {@code projectCaptureLedgerJob} — {@code query.capture_session} from the rows
+ * {@code projectCaptureLedgerJob} — {@code ledger.capture_session} from the rows
  * the recorder itself wrote.
  *
  * <p>#95 called this {@code projectCaptureRunJob}. The name moved with the unit:

@@ -57,8 +57,9 @@ class Version16ChecksumTest {
 	}
 
 	/**
-	 * The other 32 migrations are byte-identical to paddock's, so their checksums
-	 * are the live database's. Pinned from the live history on 2026-09-23.
+	 * The other 32 inherited migrations (V1-V33) are byte-identical to paddock's,
+	 * so their checksums are the live database's. Pinned from the live history on
+	 * 2026-09-23. Later versions are raptor's own and are not inherited.
 	 */
 	@Test
 	@DisplayName("every other inherited migration keeps the live database's checksum")
@@ -66,6 +67,7 @@ class Version16ChecksumTest {
 		List<String> recorded = jdbc.sql("""
 						select version || ':' || checksum from query.flyway_schema_history_acquisition
 						where version is not null and version <> '16'
+							and version::int <= 33
 						order by installed_rank""")
 				.query(String.class).list();
 

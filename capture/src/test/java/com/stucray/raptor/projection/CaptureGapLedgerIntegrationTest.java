@@ -32,7 +32,7 @@ class CaptureGapLedgerIntegrationTest {
 
 	private Instant now;
 	private long projection;
-	// query.capture_gap.id is raw's id carried across, not a generated one.
+	// ledger.capture_gap.id is raw's id carried across, not a generated one.
 	private long nextGapId;
 
 	@BeforeEach
@@ -40,7 +40,7 @@ class CaptureGapLedgerIntegrationTest {
 		now = Instant.now();
 		nextGapId = 1;
 		projection = jdbc.sql("""
-						insert into query.projection (job_name, partition_key, job_execution_id)
+						insert into ledger.ledger_run (job_name, partition_key, job_execution_id)
 						values ('test', 'gaps', 1) returning id""")
 				.query(Long.class).single();
 	}
@@ -158,8 +158,8 @@ class CaptureGapLedgerIntegrationTest {
 	private void insertMarket(String id, Instant firstSeen, Instant inPlaySince, String state,
 			Instant stateChanged) {
 		jdbc.sql("""
-						insert into query.market_scope (market_id, market_type, requested, state,
-							first_seen_at, state_changed_at, in_play_since, messages, projection_id)
+						insert into ledger.market_scope (market_id, market_type, requested, state,
+							first_seen_at, state_changed_at, in_play_since, messages, ledger_run_id)
 						values (?, 'MATCH_ODDS', true, ?, ?, ?, ?, 0, ?)""")
 				.params(Arrays.asList(id, state, at(firstSeen), at(stateChanged),
 						inPlaySince == null ? null : at(inPlaySince), projection))
@@ -168,8 +168,8 @@ class CaptureGapLedgerIntegrationTest {
 
 	private void gap(Instant from, Instant to, String cause) {
 		jdbc.sql("""
-						insert into query.capture_gap (id, session_id, started_at, ended_at, cause,
-							projection_id)
+						insert into ledger.capture_gap (id, session_id, started_at, ended_at, cause,
+							ledger_run_id)
 						values (?, 1, ?, ?, ?, ?)""")
 				.params(Arrays.asList(nextGapId++, at(from), at(to), cause, projection))
 				.update();

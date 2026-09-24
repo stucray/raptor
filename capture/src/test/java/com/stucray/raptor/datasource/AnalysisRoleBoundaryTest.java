@@ -141,28 +141,33 @@ class AnalysisRoleBoundaryTest {
 	}
 
 	@Test
-	@DisplayName("the capture ledger in query stays paddock's, and cannot be written")
+	@DisplayName("the capture ledger stays capture's, and cannot be written")
 	void cannotWriteTheCaptureLedger() {
 		// capture_session, market_scope and capture_gap are capture operations,
-		// refreshed by paddock, and leave for raptor's schema in #320 — not part
+		// refreshed by paddock, and moved to the ledger schema in #320 — never part
 		// of what V32 handed over.
 		assertRefused("the ledger records what capture did; analysis did none of it",
-				() -> analysis.sql("delete from query.capture_gap").update());
+				() -> analysis.sql("delete from ledger.capture_gap").update());
 		assertRefused("nor its sessions",
-				() -> analysis.sql("delete from query.capture_session").update());
+				() -> analysis.sql("delete from ledger.capture_session").update());
 		assertRefused("nor its scope",
-				() -> analysis.sql("delete from query.market_scope").update());
+				() -> analysis.sql("delete from ledger.market_scope").update());
 	}
 
 	@Test
-	@DisplayName("paddock still records the ledger's own projection runs")
-	void paddockStillWritesProvenance() {
-		// query.projection moved with the projection tables, but the ledger's rows
-		// point at it too, so the migration identity keeps insert and update.
-		long id = owner.sql("insert into query.projection (job_name, partition_key, job_execution_id) "
-				+ "values ('ledger', 'probe', 1) returning id").query(Long.class).single();
-		assertThat(owner.sql("update query.projection set partition_key = 'probe2' where id = ?")
-				.param(id).update()).isOne();
+	@DisplayName("the ledger keeps its own run bookkeeping, which analysis reads and cannot write (#320)")
+	void theLedgerRunsAreCapturesOwn() {
+		// Until #320 the ledger recorded its runs in query.projection, a table
+		// overround-analysis owns. They live in ledger.ledger_run now.
+		long id = owner.sql("insert into ledger.ledger_run (job_name, partition_key, job_execution_id) "
+				+ "values ('probe', 'probe', 0) returning id").query(Long.class).single();
+		assertThat(analysis.sql("select count(*) from ledger.ledger_run where id = ?")
+				.param(id).query(Long.class).single()).isOne();
+		assertRefused("insert into ledger.ledger_run",
+				() -> analysis.sql("insert into ledger.ledger_run (job_name, partition_key, "
+						+ "job_execution_id) values ('x', 'x', 0)").update());
+		assertRefused("delete from ledger.ledger_run",
+				() -> analysis.sql("delete from ledger.ledger_run").update());
 	}
 
 	@Test

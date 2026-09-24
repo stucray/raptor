@@ -1,0 +1,37 @@
+# One-click release. Thin caller — the version-bump / verify / commit /
+# tag / push / GitHub Release behaviour lives in
+# stucray/workflows/.github/workflows/release-spring-boot-maven.yml.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (default: strip -SNAPSHOT from current pom)'
+        required: false
+      next_version:
+        description: 'Next development version (default: bump patch + -SNAPSHOT)'
+        required: false
+      dry_run:
+        description: 'Dry run (no push, no Release)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: stucray/workflows/.github/workflows/release-spring-boot-maven.yml@v1
+    with:
+      # Fallback to '' so undefined dispatch inputs pass strings (not nulls)
+      # through the with: block to the called workflow's typed string inputs.
+      release_version: ${{ inputs.release_version || '' }}
+      next_version:    ${{ inputs.next_version || '' }}
+      dry_run:         ${{ inputs.dry_run }}
+    secrets:
+      release_token: ${{ secrets.RELEASE_TOKEN }}
+      # Optional — uncomment and customise if your tests need project-specific
+      # secrets (e.g. an encryption key for tests that exercise crypto code).
+      # test_env_json: '{"YOUR_PROJECT_SECRET":"${{ secrets.YOUR_PROJECT_SECRET_TEST }}"}'

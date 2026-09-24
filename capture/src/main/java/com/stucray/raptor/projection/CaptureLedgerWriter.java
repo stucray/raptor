@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
 /**
- * Derives {@code query.capture_session} from what the recorder wrote down.
+ * Derives {@code ledger.capture_session} from what the recorder wrote down.
  *
  * <p>Pure SQL, and deliberately so: every column is an aggregate over
  * {@code raw}, and a Java pass that read the rows out to count them would be
@@ -74,7 +74,7 @@ import org.springframework.stereotype.Component;
  * pure function of {@code raw}, and {@link #write(long, boolean)} with {@code
  * full} re-derives all of it from nothing — which is what to run when this class
  * changes, because an incremental pass by definition will not revisit a row
- * whose <em>recipe</em> moved. Rows keep the {@code projection_id} of the run
+ * whose <em>recipe</em> moved. Rows keep the {@code ledger_run_id} of the run
  * that actually derived them, so the ledger says when each number was computed
  * rather than when it was last copied.
  */
@@ -114,11 +114,11 @@ class CaptureLedgerWriter {
 	 * from a value the executor has in hand.
 	 */
 	private static final String PROJECT_SESSIONS_SQL = """
-			insert into query.capture_session (
+			insert into ledger.capture_session (
 				session_id, source_key, started_at, ended_at, origin, exit_status,
 				exit_detail, build_version, config_json, markets, messages, conflated,
 				first_message_at, last_message_at, gap_count, gap_total_ms, max_gap_ms,
-				gaps_sleep, gaps_silence, gaps_disconnect, projection_id)
+				gaps_sleep, gaps_silence, gaps_disconnect, ledger_run_id)
 			select s.id, s.source_key, s.started_at, s.ended_at, s.origin, s.exit_status,
 				s.exit_detail, s.build_version, s.config_json,
 				coalesce(m.markets, 0), coalesce(m.messages, 0),
@@ -126,7 +126,7 @@ class CaptureLedgerWriter {
 				coalesce(g.gap_count, 0), coalesce(g.gap_total_ms, 0),
 				coalesce(g.max_gap_ms, 0), coalesce(g.gaps_sleep, 0),
 				coalesce(g.gaps_silence, 0), coalesce(g.gaps_disconnect, 0),
-				:projectionId
+				:ledgerRunId
 			from raw.capture_session s
 			left join (
 				select session_id,
@@ -193,15 +193,15 @@ class CaptureLedgerWriter {
 	 * scope counts.
 	 */
 	private static final String PROJECT_SCOPE_SQL = """
-			insert into query.market_scope (
+			insert into ledger.market_scope (
 				market_id, event_id, event_name, competition_id, competition_name,
 				market_type, country_code, kickoff, requested, state, exit_reason,
-				first_seen_at, state_changed_at, in_play_since, messages, projection_id)
+				first_seen_at, state_changed_at, in_play_since, messages, ledger_run_id)
 			select s.market_id, s.event_id, s.event_name, s.competition_id,
 				s.competition_name, s.market_type, s.country_code, s.kickoff,
 				s.requested, s.state, s.exit_reason, s.first_seen_at,
 				s.state_changed_at, s.in_play_since,
-				coalesce(m.messages, 0), :projectionId
+				coalesce(m.messages, 0), :ledgerRunId
 			from raw.market_scope s
 			left join (
 				select market_id, count(*) as messages
@@ -220,10 +220,10 @@ class CaptureLedgerWriter {
 	 * no grant there at all — and a count alone cannot answer it.
 	 */
 	private static final String PROJECT_GAPS_SQL = """
-			insert into query.capture_gap
-				(id, session_id, started_at, ended_at, cause, detail, projection_id)
+			insert into ledger.capture_gap
+				(id, session_id, started_at, ended_at, cause, detail, ledger_run_id)
 			select g.id, g.session_id, g.started_at, g.ended_at, g.cause, g.detail,
-				:projectionId
+				:ledgerRunId
 			from raw.capture_gap g""";
 
 	/**
@@ -240,14 +240,14 @@ class CaptureLedgerWriter {
 			where s.ended_at is null
 				or s.ended_at > now() - cast(:grace as interval)
 				or not exists (
-					select 1 from query.capture_session q where q.session_id = s.id)
+					select 1 from ledger.capture_session q where q.session_id = s.id)
 				-- A spill replayed after this row was derived. THIS is the guard that
 				-- matters; see FREEZE_GRACE.
 				or exists (
 					select 1
 					from raw.spill_file f
-					join query.capture_session q on q.session_id = s.id
-					join query.projection p on p.id = q.projection_id
+					join ledger.capture_session q on q.session_id = s.id
+					join ledger.ledger_run p on p.id = q.ledger_run_id
 					where f.session_id = s.id
 						and f.ingested_at > p.started_at)""";
 
@@ -268,7 +268,7 @@ class CaptureLedgerWriter {
 			where s.state <> 'DONE'
 				or s.state_changed_at > now() - cast(:grace as interval)
 				or not exists (
-					select 1 from query.market_scope q where q.market_id = s.market_id)
+					select 1 from ledger.market_scope q where q.market_id = s.market_id)
 				-- Any spill replayed after this row was derived. Not correlated to the
 				-- market, because `raw.spill_file` records the session and one file can
 				-- carry messages for every market that session held — so the honest
@@ -278,8 +278,8 @@ class CaptureLedgerWriter {
 				or exists (
 					select 1
 					from raw.spill_file f
-					join query.market_scope q on q.market_id = s.market_id
-					join query.projection p on p.id = q.projection_id
+					join ledger.market_scope q on q.market_id = s.market_id
+					join ledger.ledger_run p on p.id = q.ledger_run_id
 					where f.ingested_at > p.started_at)""";
 
 	/** Every scoped market, for a full rebuild. */
@@ -311,7 +311,7 @@ class CaptureLedgerWriter {
 	 * @return sessions and scoped markets written — the stale ones, under {@code
 	 *     full == false}, not the table's size
 	 */
-	Written write(long projectionId, boolean full) {
+	Written write(long ledgerRunId, boolean full) {
 		List<StaleSession> staleSessions = jdbc.sql(full ? ALL_SESSIONS_SQL : STALE_SESSIONS_SQL)
 				.param("grace", FREEZE_GRACE)
 				.query((rs, row) -> new StaleSession(
@@ -327,21 +327,21 @@ class CaptureLedgerWriter {
 			// The rebuild's own reason to exist: rows whose recipe changed have to
 			// go even when their inputs did not, and a stale session no longer in
 			// raw at all would otherwise survive forever.
-			jdbc.sql("delete from query.capture_session").update();
-			jdbc.sql("delete from query.market_scope").update();
+			jdbc.sql("delete from ledger.capture_session").update();
+			jdbc.sql("delete from ledger.market_scope").update();
 		}
-		jdbc.sql("delete from query.capture_gap").update();
+		jdbc.sql("delete from ledger.capture_gap").update();
 
 		long sessions = 0;
 		if (!staleSessions.isEmpty()) {
 			List<Long> ids = staleSessions.stream().map(StaleSession::id).toList();
 			if (!full) {
-				jdbc.sql("delete from query.capture_session where session_id in (:sessionIds)")
+				jdbc.sql("delete from ledger.capture_session where session_id in (:sessionIds)")
 						.param("sessionIds", ids)
 						.update();
 			}
 			sessions = jdbc.sql(PROJECT_SESSIONS_SQL)
-					.param("projectionId", projectionId)
+					.param("ledgerRunId", ledgerRunId)
 					.param("sessionIds", ids)
 					.param("ptFloor", monthFloor(
 							staleSessions.stream().map(StaleSession::startedAt).toList()))
@@ -352,19 +352,19 @@ class CaptureLedgerWriter {
 		if (!staleMarkets.isEmpty()) {
 			List<String> ids = staleMarkets.stream().map(StaleMarket::marketId).toList();
 			if (!full) {
-				jdbc.sql("delete from query.market_scope where market_id in (:marketIds)")
+				jdbc.sql("delete from ledger.market_scope where market_id in (:marketIds)")
 						.param("marketIds", ids)
 						.update();
 			}
 			scoped = jdbc.sql(PROJECT_SCOPE_SQL)
-					.param("projectionId", projectionId)
+					.param("ledgerRunId", ledgerRunId)
 					.param("marketIds", ids)
 					.param("ptFloor", monthFloor(staleMarkets.stream()
 							.map(StaleMarket::firstSeenAt).toList()))
 					.update();
 		}
 
-		long gaps = jdbc.sql(PROJECT_GAPS_SQL).param("projectionId", projectionId).update();
+		long gaps = jdbc.sql(PROJECT_GAPS_SQL).param("ledgerRunId", ledgerRunId).update();
 		return new Written(sessions, scoped, gaps);
 	}
 
@@ -403,7 +403,7 @@ class CaptureLedgerWriter {
 	/** Opens a projection run, returning its id. */
 	long begin(String jobName, String partitionKey, long jobExecutionId) {
 		return jdbc.sql("""
-						insert into query.projection (job_name, partition_key, job_execution_id)
+						insert into ledger.ledger_run (job_name, partition_key, job_execution_id)
 						values (?, ?, ?)
 						returning id""")
 				.params(jobName, partitionKey, jobExecutionId)
@@ -420,14 +420,14 @@ class CaptureLedgerWriter {
 	 * make that column mean two different things depending on which job wrote the
 	 * row, which is the kind of overload that is free to add and expensive to
 	 * read. What this run produced is countable directly from
-	 * {@code query.capture_session}.
+	 * {@code ledger.capture_session}.
 	 */
-	void complete(long projectionId) {
+	void complete(long ledgerRunId) {
 		jdbc.sql("""
-						update query.projection
+						update ledger.ledger_run
 						set completed_at = clock_timestamp()
 						where id = ?""")
-				.param(projectionId)
+				.param(ledgerRunId)
 				.update();
 	}
 }
