@@ -70,21 +70,62 @@ class SchemaMigrationTest {
 	}
 
 	/**
-	 * The read side can see `query` and cannot see `raw` at all. This is the
-	 * contract between the two services, and it is a grant, not a convention.
+	 * What the read identity can see of `raw` and `batch`, asserted as a SET.
+	 *
+	 * <p>It saw nothing there until V35 (paddock#321): the operational screens
+	 * read capture's file and run records, and nothing else. A set, not a
+	 * membership check, because the hazard is an EXTRA table — above all
+	 * {@code raw.stream_message}, whose payloads no screen should reach — and a
+	 * test that asserts each wanted table is readable cannot see one.
 	 */
 	@Test
-	void readerRoleReachesQueryButNotRaw() {
-		assertThat(jdbc.sql("select has_schema_privilege('paddock_reader', 'query', 'usage')")
-				.query(Boolean.class).single())
-				.as("paddock_reader must be able to read the query contract")
-				.isTrue();
+	void readerSeesCapturesRecordsButNoPayload() {
+		List<String> readable = jdbc.sql("""
+				select n.nspname || '.' || c.relname
+				from pg_class c
+				join pg_namespace n on n.oid = c.relnamespace
+				where n.nspname in ('raw', 'batch') and c.relkind in ('r', 'p', 'v')
+				  and has_any_column_privilege('paddock_reader', c.oid, 'select')""")
+				.query(String.class)
+				.list();
 
-		assertThat(jdbc.sql("select has_schema_privilege('paddock_reader', 'raw', 'usage')")
-				.query(Boolean.class).single())
-				.as("paddock_reader must have no access to the system of record — "
-						+ "if the read side needs something from raw, that is a missing "
-						+ "projection, not a missing grant")
-				.isFalse();
+		assertThat(readable).containsExactlyInAnyOrder(
+				"raw.historic_file", "raw.capture_file", "raw.football_file",
+				"batch.batch_job_instance", "batch.batch_job_execution");
+	}
+
+	/**
+	 * {@code raw.football_file} keeps each CSV's bytes, so it is a payload table
+	 * as well as a file ledger, and V35 grants it by column. The witness is that
+	 * a column beside {@code content} IS readable: without it, this would pass
+	 * just as well against a table the reader could not read at all.
+	 */
+	@Test
+	void readerSeesTheFootballFileLedgerButNotItsContent() {
+		String privileges = jdbc.sql("""
+				select has_column_privilege('paddock_reader', 'raw.football_file', 'fetched_at', 'select')
+				    || '/' || has_column_privilege('paddock_reader', 'raw.football_file', 'content', 'select')""")
+				.query(String.class)
+				.single();
+
+		assertThat(privileges).isEqualTo("true/false");
+	}
+
+	/** And it writes none of it: V35 grants select, and select is all. */
+	@Test
+	void readerWritesNothingInRawOrBatch() {
+		Long writable = jdbc.sql("""
+				select count(*)
+				from pg_class c
+				join pg_namespace n on n.oid = c.relnamespace
+				where n.nspname in ('raw', 'batch') and c.relkind in ('r', 'p')
+				  and (has_table_privilege('paddock_reader', c.oid, 'insert')
+				    or has_table_privilege('paddock_reader', c.oid, 'update')
+				    or has_table_privilege('paddock_reader', c.oid, 'delete')
+				    or has_table_privilege('paddock_reader', c.oid, 'truncate'))""")
+				.query(Long.class)
+				.single();
+
+		assertThat(writable).isZero();
 	}
 }

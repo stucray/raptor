@@ -3,10 +3,10 @@
     "tool": "pmd",
     "tool_version": "7.24.0",
     "ruleset": "pmd-ruleset.xml",
-    "total_findings": 75,
+    "total_findings": 76,
     "by_priority": {
       "2": 6,
-      "3": 69
+      "3": 70
     }
   },
   "findings": [
@@ -860,6 +860,18 @@
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
       "begin_line": 50,
       "end_line": 386,
+      "message": "This class has too many methods, consider refactoring it."
+    },
+    {
+      "rule": "TooManyMethods",
+      "ruleset": "Design",
+      "priority": 3,
+      "package": "com.stucray.raptor.health",
+      "class": "CollectorHealthController",
+      "method": "",
+      "file": "src/main/java/com/stucray/raptor/health/CollectorHealthController.java",
+      "begin_line": 36,
+      "end_line": 475,
       "message": "This class has too many methods, consider refactoring it."
     },
     {

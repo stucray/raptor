@@ -1,0 +1,32 @@
+/* You can add global styles to this file, and also import other style files */
+
+/* Shared table + status styles for the data screens */
+table {
+  border-collapse: collapse;
+  inline-size: 100%;
+}
+
+th,
+td {
+  text-align: start;
+  padding: 0.4rem 0.75rem;
+  border-block-end: 1px solid light-dark(#eee, #2a2a2a);
+}
+
+th.num,
+td.num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.warn {
+  color: light-dark(#b45309, #fbbf24);
+}
+
+.ok {
+  color: light-dark(#15803d, #4ade80);
+}
+
+.empty {
+  opacity: 0.7;
+}

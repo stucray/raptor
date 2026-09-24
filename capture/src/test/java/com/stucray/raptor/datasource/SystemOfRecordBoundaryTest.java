@@ -46,11 +46,41 @@ class SystemOfRecordBoundaryTest {
 						.single());
 	}
 
+	/**
+	 * Refused on the run ledger until V35 (paddock#321), which let the
+	 * operational screens read which job ran and how it ended. What it still
+	 * cannot reach is the serialised job state, and it can write none of it.
+	 */
 	@Test
-	@DisplayName("the read identity cannot reach the run ledger either")
-	void readIdentityIsRefusedOnBatch() {
+	@DisplayName("the read identity reads the run ledger, but not job state, and writes none of it")
+	void readIdentityReadsTheRunLedgerAndNothingMore() {
+		assertThat(readSide.sql("select count(*) from batch.batch_job_execution")
+				.query(Long.class)
+				.single())
+				.as("the screens show job history from here")
+				.isNotNull();
+		assertRefused("the execution context holds serialised job state, not history",
+				() -> readSide.sql("select count(*) from batch.batch_job_execution_context")
+						.query(Long.class)
+						.single());
 		assertRefused("the run ledger is the write path's own bookkeeping",
-				() -> readSide.sql("select count(*) from batch.batch_job_execution")
+				() -> readSide.sql("delete from batch.batch_job_execution").update());
+	}
+
+	/**
+	 * {@code raw.football_file} is a file ledger and a payload table at once: it
+	 * keeps each CSV's bytes. V35 granted its ledger columns and not
+	 * {@code content}, and this is that line observed holding.
+	 */
+	@Test
+	@DisplayName("the read identity sees the football file ledger but not the files")
+	void readIdentityIsRefusedOnFootballFileContent() {
+		assertThat(readSide.sql("select count(*) from (select path, fetched_at from raw.football_file) f")
+				.query(Long.class)
+				.single())
+				.isNotNull();
+		assertRefused("a CSV's bytes are a payload, which no screen should reach",
+				() -> readSide.sql("select count(content) from raw.football_file")
 						.query(Long.class)
 						.single());
 	}
