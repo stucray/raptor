@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Is it safe to shut the lid or unplug right now — and for how long?
+#
+# WHY THIS EXISTS. Capture lives on a laptop that gets carried around, and the
+# durable fix — capture not living on a laptop — is not available. So the
+# mitigation is behavioural: shut the lid only when nothing is in scope. This
+# script is that check, because the decision has to be one command and not a
+# reading of JSON at the moment of walking out of the door.
+#
+# WHY IT READS `scope` AND NOT `state`. The recorder's state is the field a
+# human reaches for and it is the wrong one: when everything in the last
+# subscription finishes, `TlsStreamSource.follow()` deliberately KEEPS the
+# subscription rather than sending an empty marketSubscription Betfair has no
+# good answer to. So the stream stays open and the recorder stays non-IDLE long
+# after the last market is done — 5h22m on the night of 2026-09-11, where scope
+# had emptied at 21:01Z and `state` did not say IDLE until 02:33Z. Reading
+# `state` gives a false "busy" for hours, and a safety rule that cries wolf gets
+# ignored, which is how it fails at the one moment it matters.
+#
+# `scope.marketsInScope` is the honest signal: it went to 0 at 21:01Z that
+# night, exactly when the last market finished.
+#
+# WHY UNREACHABLE IS NOT SAFE. raptor being down does not mean nothing is
+# happening — it can be down *while* markets are in scope, which is the
+# dangerous case, not the safe one. Unknown reads as unknown.
+#
+# HOW LONG YOU HAVE GOT (#265). This used to answer "now" and nothing else,
+# because `nextKickoff` is the earliest kickoff ALREADY IN SCOPE and is
+# therefore null exactly when the question is being asked. `scope.lookahead` is
+# the separate figure that fixes it: a catalogue query over its own multi-day
+# window, which sees tonight's kickoffs this morning. `secondsUntilScopeOpens`
+# is the subtraction raptor does for us — scope opens a horizon before kickoff,
+# and the horizon is a property of the application, not of this script.
+#
+# READ `known` BEFORE `nextKickoff`. A missing kickoff means the window is
+# genuinely clear; `known:false` means nobody could ask. Treating the second as
+# the first would shut the lid on a live card the first time Betfair was
+# unreachable, which is the #122 / #141 / #144 shape pointed at the operator.
+#
+#   lid          report and explain
+#   lid --quiet  exit status only, for scripting
+#
+# Exit: 0 safe, 1 not safe, 2 unknown (endpoint unreachable or unparseable).
+
+# Configuration first, before any default below reads a setting: ops.env
+# can only supply a value the script has not already defaulted.
+# shellcheck source=raptor-ops-env.sh
+source "$(dirname "$0")/raptor-ops-env.sh"
+
+set -uo pipefail
+
+HEALTH="${RAPTOR_HEALTH_URL:-$RAPTOR_BACKEND_URL/actuator/health/capture}"
+
+quiet=""
+case "${1:-}" in
+	--quiet) quiet=1 ;;
+	"") ;;
+	*) printf 'usage: %s [--quiet]\n' "$(basename "$0")" >&2; exit 2 ;;
+esac
+
+say() { [[ -n "$quiet" ]] || printf '%s\n' "$*"; }
+
+# Whole hours and minutes. Seconds are noise at this timescale and "4h07m"
+# is what a person actually needs to decide whether to go out.
+duration() { # $1 = seconds
+	local s="$1"
+	if (( s < 60 )); then printf '%ds' "$s"; return; fi
+	printf '%dh%02dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+}
+
+# python3 rather than sed: `marketsInScope` appears in BOTH the captureCoverage
+# and scope components, so a `sed | head -1` reads whichever the serialiser
+# happened to put first. Different code paths, and this script's whole value is
+# being right about which one it read.
+if ! command -v python3 >/dev/null 2>&1; then
+	say "lid: UNKNOWN — python3 not found, cannot parse the health payload"
+	exit 2
+fi
+
+body="$(curl -sf --max-time 5 "$HEALTH" 2>/dev/null)"
+if [[ -z "$body" ]]; then
+	say "lid: UNKNOWN — $HEALTH is unreachable."
+	say "     raptor being down is not the same as nothing being in scope. Do not"
+	say "     treat this as safe; bring the stack up, or check Betfair by hand."
+	exit 2
+fi
+
+# One line of fields, in a fixed order, so a missing key cannot shift the rest:
+# every optional value is emitted as "-" rather than omitted.
+parsed="$(printf '%s' "$body" | python3 -c '
+import json, sys
+def dash(value):
+    return "-" if value is None else value
+try:
+    h = json.load(sys.stdin)
+    s = h["components"]["scope"]["details"]
+    r = h["components"]["recorder"]["details"]
+    look = s.get("lookahead") or {}
+except Exception as exc:
+    print("ERR", exc)
+    sys.exit(0)
+print("OK", s["marketsInScope"], s.get("pending", 0), s.get("subscribed", 0),
+      s.get("live", 0), r.get("state", "?"), dash(s.get("nextKickoff")),
+      bool(look.get("known")), bool(look.get("stale", True)),
+      dash(look.get("secondsUntilScopeOpens")), dash(look.get("nextKickoff")),
+      dash(look.get("windowSeconds")), look.get("consecutiveFailures", 0))
+' 2>/dev/null)"
+
+read -r status scope pending subscribed live state kickoff known stale opens next window failures <<<"$parsed"
+
+if [[ "$status" != "OK" ]]; then
+	say "lid: UNKNOWN — could not parse the health payload (shape changed?)"
+	exit 2
+fi
+
+if (( scope > 0 )); then
+	say "lid: DO NOT CLOSE — $scope market(s) in scope."
+	say "     $live live (in-play), $subscribed subscribed (pre-kickoff prices), $pending pending"
+	say "     next kickoff in scope: $kickoff"
+	say "     A suspend here costs book that Betfair will not replay."
+	exit 1
+fi
+
+# Nothing in scope. Safe NOW whatever the lookahead says — the exit status is
+# about this moment, and a failed forward-visibility poll must not turn a quiet
+# Tuesday into "do not close". What the lookahead changes is how much the
+# message can promise.
+say "lid: SAFE — nothing in scope."
+
+if [[ "$known" != "True" ]]; then
+	say "     Forward visibility UNAVAILABLE (${failures} failed poll(s)) — this answers"
+	say "     now, and says nothing about tonight. Check Betfair by hand before"
+	say "     leaving it unattended for long."
+elif [[ "$opens" == "-" ]]; then
+	if [[ "$window" != "-" ]]; then
+		say "     No kickoff at all in the next $(duration "$window") — clear for the whole window."
+	else
+		say "     No kickoff at all inside the lookahead window."
+	fi
+else
+	say "     Nothing enters scope for $(duration "$opens") (next kickoff $next)."
+fi
+
+if [[ "$stale" == "True" && "$known" == "True" ]]; then
+	say "     NOTE: that figure is stale — the lookahead poll has not completed"
+	say "     recently, so treat the window as a floor, not a promise."
+fi
+
+if [[ "$state" != "IDLE" ]]; then
+	say "     (recorder says $state, not IDLE — that is the stale subscription"
+	say "      described above, not work in progress. Scope is the truth.)"
+fi
+exit 0

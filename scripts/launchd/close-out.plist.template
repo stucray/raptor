@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@LABEL@</string>
+
+    <!-- Runs the copy in the state directory (RAPTOR_STATE_DIR), not the one in the repo: a branch checkout
+         must not be able to rewrite the trigger mid-run. Deployed by
+         bin/deploy-agents. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@STATE_DIR@/raptor-close-out.sh</string>
+    </array>
+
+    <!-- 23:30Z (RAPTOR_CLOSE_OUT_UTC). StartCalendarInterval is LOCAL time, so
+         bin/deploy-agents converts the UTC setting into this machine's hour and
+         minute when it renders the plist; the UTC figure is the one that
+         matters (the backup plist has the scar that says so). Re-run the deploy
+         after a clock change. The app holds the same due time as
+         `raptor.close-out.due` and reports `closeOutDue.overdue` on
+         /actuator/health/capture when no run has started an hour after it —
+         which is what will say so if this machine ever changes zone.
+
+         StartCalendarInterval and not an in-app cron is the point of #334:
+         launchd starts a firing missed during sleep on wake, where Spring's
+         timer slipped by every minute of it.
+
+         RunAtLoad is deliberately absent: deploying the agent must not sweep
+         the archive. `launchctl kickstart` forces one. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>@HOUR@</integer>
+        <key>Minute</key>
+        <integer>@MINUTE@</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@STATE_DIR@/close-out.log</string>
+    <key>StandardErrorPath</key>
+    <string>@STATE_DIR@/close-out.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

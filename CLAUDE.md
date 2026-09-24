@@ -16,6 +16,12 @@ verbatim, keeps native ids exactly as received, and never interprets.
   `Version16ChecksumTest`). A change is a new migration, never an edit.
 - **`raw` is append-only.** Never `update`, never `delete`.
 - Every COPY timestamp carries an explicit offset.
+- **The ops scripts carry nothing machine-specific** (`docs/ops.md`). Paths,
+  labels, containers, ports and the secrets file come from `ops.env` through
+  `scripts/raptor-ops-env.sh`, which each script sources as its FIRST statement —
+  a default set before it silently wins over the file. Every suite under
+  `scripts/test/` pins `RAPTOR_OPS_ENV=/dev/null`, and `bin/deploy-agents`
+  runs them all before it touches launchd.
 
 ## Build
 

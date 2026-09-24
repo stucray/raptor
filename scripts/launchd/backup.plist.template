@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@LABEL@</string>
+
+    <!-- Runs the copy in the state directory (RAPTOR_STATE_DIR), not the one in the repo: a branch checkout
+         must not be able to delete or rewrite the backup mid-run. See the
+         DEPLOY block in scripts/raptor-backup.sh; keep the two in sync. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@STATE_DIR@/raptor-backup.sh</string>
+    </array>
+
+    <!-- 05:47Z (RAPTOR_BACKUP_UTC), and the UTC figure is the one that matters:
+         bin/deploy-agents converts it into this machine's local hour and minute
+         when it renders the plist, because StartCalendarInterval is LOCAL.
+         This first shipped as 03:30 local, described as "nowhere near a
+         kickoff", which was wrong by nine hours: StartCalendarInterval is
+         LOCAL, the machine runs at UTC+7, and 03:30 local is 20:30Z — ninety
+         minutes into a Saturday's 19:00Z kickoffs. The project's day is a UTC
+         day, and the local small hours ARE the European evening.
+
+         05:47Z sits in the real quiet window: after the previous card has
+         finished (last kickoffs 19:00Z, done by ~21:00Z) and before scope
+         opens for the next one (4h horizon, earliest observed kickoff 11:00Z,
+         so scope opens ~07:00Z). The dump is a reader and cannot block the
+         recorder, but it is a minute of I/O on a laptop and the quiet window
+         costs nothing to use.
+
+         StartCalendarInterval, not StartInterval: launchd fires a missed
+         calendar job ONCE on wake, so a machine asleep at 03:30 still backs up
+         when it wakes rather than skipping the day silently. A machine that
+         suspends is the norm here (#107).
+
+         RunAtLoad is deliberately absent — a `launchctl kickstart` is the way
+         to force one, and loading the agent should not trigger a dump. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>@HOUR@</integer>
+        <key>Minute</key>
+        <integer>@MINUTE@</integer>
+    </dict>
+
+    <!-- launchd hands a job a near-empty environment. HOME is needed for the
+         age key, the state file and the default backup directory; the script
+         sets its own PATH regardless. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@STATE_DIR@/backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>@STATE_DIR@/backup.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>
