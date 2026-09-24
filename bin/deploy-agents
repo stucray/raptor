@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# Put the launchd agents where launchd runs them, and say when they have drifted.
+#
+# WHY THE DEPLOYED COPY IS NOT THE REPO COPY. Every one of these jobs watches or
+# protects the capture, and a `git checkout` of another branch rewrites the
+# working tree under a job that may be mid-run. So launchd is pointed at the
+# state directory (RAPTOR_STATE_DIR), outside every repo, and this script is
+# what keeps that copy current.
+#
+# WHY THAT MATTERS MORE THAN THE KEYSTROKES. A stale deployed copy does not
+# fail — it goes on reporting OK from code that predates the change, which is
+# indistinguishable from working (#122, #141, #144). Hence `--check`.
+#
+# WHY THIS IS NOT PART OF STARTING THE STACK. The agents exist to outlive the app
+# being down; that is the entire reason they are launchd jobs and not threads.
+#
+# CONFIGURATION (#322). Nothing machine-specific is in this repo: the state
+# directory, the launchd label prefix, the backend URL, the containers, the
+# secrets file and the UTC times of the scheduled jobs all come from ops.env —
+# see scripts/ops.env.example, and scripts/raptor-ops-env.sh for where it is
+# looked for. The plists under scripts/launchd/ are TEMPLATES, rendered here.
+#
+# WHICH AGENTS. RAPTOR_AGENTS (space-separated, default all five) says which
+# agents this machine runs. A machine running raptor's heartbeat as a shadow
+# beside another deployment lists only `heartbeat`, with RESTART_ENABLED=false
+# and no secrets in its ops.env, so it can observe and cannot act.
+#
+#   bin/deploy-agents          render, copy, re-bootstrap, verify registration
+#   bin/deploy-agents --check  report drift only; changes nothing
+#   bin/deploy-agents --force  deploy even with markets in scope
+#
+# Exit 1 from --check means something differs.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+# shellcheck source=../scripts/raptor-ops-env.sh
+source scripts/raptor-ops-env.sh
+
+DEST="$RAPTOR_STATE_DIR"
+AGENTS_DIR="${RAPTOR_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+PREFIX="$RAPTOR_LABEL_PREFIX"
+DOMAIN="gui/$(id -u)"
+
+# agent:script — the template is scripts/launchd/<agent>.plist.template by
+# construction, so a new agent is one line here and cannot be half-registered.
+ALL_JOBS=(
+  "heartbeat:raptor-heartbeat.sh"
+  "keep-awake:keep-awake"
+  "backup:raptor-backup.sh"
+  "restore-drill:raptor-restore-drill.sh"
+  "close-out:raptor-close-out.sh"
+)
+
+# The UTC time each scheduled agent fires at, converted to local at render time
+# because StartCalendarInterval is local (the backup plist carries the scar).
+utc_time_for() {
+  case "$1" in
+    backup)        echo "${RAPTOR_BACKUP_UTC:-05:47}" ;;
+    restore-drill) echo "${RAPTOR_RESTORE_DRILL_UTC:-06:11}" ;;
+    close-out)     echo "${RAPTOR_CLOSE_OUT_UTC:-23:30}" ;;
+    *)             echo "" ;;
+  esac
+}
+
+# Deployed beside the agents with no job of their own: the config loader every
+# script sources, and `lid`, which a human types.
+SUPPORT=(
+  "raptor-ops-env.sh"
+  "lid"
+)
+
+selected="${RAPTOR_AGENTS:-heartbeat keep-awake backup restore-drill close-out}"
+JOBS=()
+for want in $selected; do
+  known=""
+  for job in "${ALL_JOBS[@]}"; do
+    [[ "${job%%:*}" == "$want" ]] && { JOBS+=("$job"); known=1; }
+  done
+  [[ -n "$known" ]] || { echo "RAPTOR_AGENTS names an unknown agent: $want" >&2; exit 2; }
+done
+
+check_only=""; force=""
+case "${1:-}" in
+  --check) check_only=1 ;;
+  --force) force=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--check|--force]" >&2; exit 2 ;;
+esac
+
+# --- rendering ----------------------------------------------------------------
+# Local hour and minute for a UTC HH:MM, today, on this machine. Re-deploy after
+# a clock change: the rendered plist holds the local figure.
+local_hour_minute() { # $1 = HH:MM (UTC)
+  [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || return 1
+  local epoch
+  epoch=$(date -j -u -f '%Y-%m-%d %H:%M' "$(date -u +%Y-%m-%d) $1" +%s) || return 1
+  date -r "$epoch" '+%-H %-M'
+}
+
+render() { # $1 = agent  → rendered plist on stdout
+  local agent="$1" utc hm hour="" minute=""
+  utc=$(utc_time_for "$agent")
+  if [[ -n "$utc" ]]; then
+    hm=$(local_hour_minute "$utc") || return 1
+    hour="${hm% *}"; minute="${hm#* }"
+  fi
+  sed -e "s|@LABEL@|$PREFIX.$agent|g" \
+      -e "s|@STATE_DIR@|$DEST|g" \
+      -e "s|@HOME@|$HOME|g" \
+      -e "s|@HOUR@|$hour|g" \
+      -e "s|@MINUTE@|$minute|g" \
+      "scripts/launchd/$agent.plist.template"
+}
+
+# A template loaded with a placeholder still in it fails silently in launchd —
+# the reason keep-awake once refused to commit a plist at all. So a rendered
+# plist is refused unless it is fully substituted AND valid.
+RENDER_DIR="$(mktemp -d)"
+trap 'rm -rf "$RENDER_DIR"' EXIT
+for job in "${JOBS[@]}"; do
+  agent="${job%%:*}"
+  out="$RENDER_DIR/$PREFIX.$agent.plist"
+  if ! render "$agent" > "$out"; then
+    echo "refusing: could not render $agent — its UTC time must be HH:MM" >&2; exit 1
+  fi
+  if grep -qE '@[A-Z_]+@' "$out"; then
+    echo "refusing: $agent still carries a placeholder after rendering:" >&2
+    grep -nE '@[A-Z_]+@' "$out" >&2; exit 1
+  fi
+  if ! plutil -lint -s "$out"; then
+    echo "refusing: the rendered $agent plist is not a valid plist" >&2; exit 1
+  fi
+done
+
+# RAPTOR_RENDER_ONLY=<dir>: copy the rendered plists there and stop. For the
+# test suite, which checks rendering without touching launchd.
+if [[ -n "${RAPTOR_RENDER_ONLY:-}" ]]; then
+  cp "$RENDER_DIR"/*.plist "$RAPTOR_RENDER_ONLY"/
+  exit 0
+fi
+
+# REFUSE TO DEPLOY WHILE ANYTHING IS IN SCOPE (#192). Deploying boots each job
+# out and back in, and for keep-awake that drops the power assertion holding the
+# machine awake. --check never touches anything and is always allowed.
+if [[ -z "$check_only" && -z "$force" ]]; then
+  scope=$(curl -sf --max-time 5 "$RAPTOR_BACKEND_URL/actuator/health/capture" 2>/dev/null \
+          | sed -n 's/.*"marketsInScope":\([0-9]*\).*/\1/p' | head -1)
+  # An unreachable backend is not a reason to refuse: nothing is capturing.
+  if [[ -n "$scope" && "$scope" -gt 0 ]]; then
+    echo "refusing: $scope market(s) in scope — deploying bounces keep-awake and drops"
+    echo "the power assertion. Wait for an empty scope, or --force if you mean it."
+    exit 1
+  fi
+fi
+
+# THESE SCRIPTS' OWN TESTS, BEFORE THEIR CODE GOES ANYWHERE NEAR LAUNCHD (#201),
+# every suite under scripts/test/, found by glob (#282). --check is exempt:
+# refusing to REPORT drift because a test failed would suppress exactly the
+# message a broken watchdog needs to emit.
+if [[ -z "$check_only" ]]; then
+  shopt -s nullglob
+  for suite in scripts/test/*-test.sh; do
+    [[ -x "$suite" ]] || continue
+    # A clean environment: this script has just exported the operator's whole
+    # config, and a suite must test the code, not this machine's settings.
+    if ! test_output=$(env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+                         "$suite" 2>&1); then
+      echo "refusing: $(basename "$suite") fails — deploying this would put a"
+      echo "watchdog that does not work in front of an unattended capture."
+      printf '%s\n' "$test_output"
+      exit 1
+    fi
+    echo "$(basename "$suite" -test.sh) tests: ${test_output##*$'\n'}"
+  done
+  shopt -u nullglob
+fi
+
+drift=0
+note() { echo "  $*"; }
+
+# The ops.env the scripts will read once deployed: the one just loaded, copied
+# beside them, so a job launchd starts with an empty environment reads exactly
+# what this deploy read.
+config_src="$raptor_ops_env_file"
+[[ -r "$config_src" && "$config_src" != /dev/null ]] || config_src=""
+
+# --- what differs -----------------------------------------------------------
+compare() { # $1 = source  $2 = deployed
+  if [[ ! -e "$2" ]]; then
+    note "MISSING   $2 (never deployed)"; drift=1
+  elif ! diff -q "$1" "$2" >/dev/null 2>&1; then
+    note "STALE     $2 differs from $1"; drift=1
+  fi
+}
+
+for job in "${JOBS[@]}"; do
+  agent="${job%%:*}"; script="${job##*:}"
+  compare "scripts/$script" "$DEST/$script"
+  compare "$RENDER_DIR/$PREFIX.$agent.plist" "$AGENTS_DIR/$PREFIX.$agent.plist"
+  # Registered as well as present: a copied plist that was never bootstrapped
+  # is a file, not a job, and looks identical to a working one on disk.
+  if ! launchctl print "$DOMAIN/$PREFIX.$agent" >/dev/null 2>&1; then
+    note "NOT LOADED $PREFIX.$agent is not registered with launchd"; drift=1
+  fi
+done
+for script in "${SUPPORT[@]}"; do
+  compare "scripts/$script" "$DEST/$script"
+done
+if [[ -n "$config_src" && "$config_src" != "$DEST/ops.env" ]]; then
+  compare "$config_src" "$DEST/ops.env"
+fi
+
+# --- what is installed that this machine does not run -----------------------
+# The other direction, which a copy-forward script would never find: a job under
+# this prefix that is not in RAPTOR_AGENTS, or has no template at all.
+while IFS= read -r plist; do
+  label=$(basename "$plist" .plist)
+  agent="${label#"$PREFIX".}"
+  wanted=""
+  for job in "${JOBS[@]}"; do [[ "${job%%:*}" == "$agent" ]] && wanted=1; done
+  if [[ -z "$wanted" ]]; then
+    note "UNTRACKED $plist is installed but is not in RAPTOR_AGENTS ($selected)"
+    drift=1
+  fi
+done < <(find "$AGENTS_DIR" -maxdepth 1 -name "$PREFIX.*.plist" 2>/dev/null | sort)
+
+if [[ -n "$check_only" ]]; then
+  if (( drift )); then
+    echo "raptor agents: DRIFT — run bin/deploy-agents"
+    exit 1
+  fi
+  echo "raptor agents: deployed copies match the repo"
+  exit 0
+fi
+
+if (( ! drift )); then
+  echo "raptor agents: already current; nothing to do"
+  exit 0
+fi
+
+# --- deploy -----------------------------------------------------------------
+mkdir -p "$DEST" "$AGENTS_DIR"
+for script in "${SUPPORT[@]}"; do
+  install -m 755 "scripts/$script" "$DEST/$script"
+done
+if [[ -n "$config_src" && "$config_src" != "$DEST/ops.env" ]]; then
+  install -m 600 "$config_src" "$DEST/ops.env"
+fi
+
+for job in "${JOBS[@]}"; do
+  agent="${job%%:*}"; script="${job##*:}"; label="$PREFIX.$agent"
+  install -m 755 "scripts/$script" "$DEST/$script"
+  install -m 644 "$RENDER_DIR/$label.plist" "$AGENTS_DIR/$label.plist"
+
+  # bootout before bootstrap: bootstrapping an already-loaded label fails with
+  # "Bootstrap failed: 5: Input/output error". A job that was not loaded makes
+  # the bootout fail instead, which is fine and is why its status is discarded.
+  launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1
+
+  # AND THEN WAIT FOR IT, because bootout RETURNS BEFORE THE JOB IS GONE (#192).
+  # launchd tears a job down asynchronously; bootstrapping the same label while
+  # the old one is still dying fails with the very error the bootout was there
+  # to avoid — every time, for a KeepAlive job holding a child like keep-awake.
+  for _ in $(seq 1 50); do
+    launchctl print "$DOMAIN/$label" >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+
+  if ! launchctl bootstrap "$DOMAIN" "$AGENTS_DIR/$label.plist"; then
+    echo "FAILED to bootstrap $label" >&2
+    exit 1
+  fi
+  # REGISTERED, not merely on disk: the two look identical and are opposite in
+  # meaning, and a failed bootstrap once left keep-awake unloaded (#192).
+  if ! launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
+    echo "FAILED: $label bootstrapped but is not registered" >&2
+    exit 1
+  fi
+  echo "deployed $label"
+done
+
+# Only the heartbeat is kickstarted: it costs two curls and runs every five
+# minutes anyway, and firing it now turns "deployed" into "observed working".
+# The backup, drill and close-out are real work and wait for their schedule.
+for job in "${JOBS[@]}"; do
+  if [[ "${job%%:*}" == "heartbeat" ]]; then
+    launchctl kickstart -k "$DOMAIN/$PREFIX.heartbeat"
+    echo
+    echo "heartbeat fired. Its verdict lands in $DEST/heartbeat.log within a second:"
+    echo "  tail -1 $DEST/heartbeat.log"
+  fi
+done

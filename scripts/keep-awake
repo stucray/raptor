@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Hold the Mac awake for exactly as long as raptor is recording.
+#
+# WHY THIS LIVES ON THE HOST AND NOT IN THE APPLICATION (issue #107)
+# ------------------------------------------------------------------
+# `PowerAssertion` spawns `caffeinate` while a market is in-play, which is the
+# right behaviour and the wrong process: `bin/up` runs raptor as a Linux
+# container, `caffeinate` is a macOS binary, and a container can no more hold a
+# host power assertion than read one. Sleep is the largest single cause of gaps
+# in the corpus — 2026-08-23 lost the back half of two matches while the log
+# went on printing heartbeats — so "it holds nothing in the deployed shape" is
+# not a cosmetic gap.
+#
+# This agent asks raptor the same question from outside, over the health
+# endpoint it already publishes, and holds the assertion where it can actually
+# be held. Nothing new is added to the application and no new channel is opened:
+# `/actuator/health/capture` is a documented, localhost-only surface that exists
+# for exactly this kind of question.
+#
+# Not `--profile app`'s business either. The assertion has to outlive a
+# container restart — that is most of the point — so it belongs to launchd.
+#
+# DEPLOY: `bin/deploy-agents`, like every other agent (#192). This script used
+# to install its OWN plist, writing whatever absolute path it happened to be
+# sitting at — so the loaded job pointed into the repo working tree, and a
+# branch checkout could rewrite the agent holding the machine awake, mid-match.
+# That is exactly the hazard the state directory exists to prevent, and it was the last
+# agent still exposed to it.
+#
+# The generator's reason for not committing a plist was that a template with a
+# placeholder in it eventually gets loaded without substituting, and launchd
+# fails silently on that. That reason came back when the tooling went public
+# (#322): the label and the paths are configuration now, so the plist IS a
+# template again — and bin/deploy-agents refuses to load one that still carries
+# a placeholder, which is the check the old reason was asking for. `--status`
+# stays; it answers a question a human asks.
+
+# Configuration first, before any default below reads a setting: ops.env
+# can only supply a value the script has not already defaulted.
+# shellcheck source=raptor-ops-env.sh
+source "$(dirname "$0")/raptor-ops-env.sh"
+
+set -uo pipefail    # NOT -e: a poll that fails must not take the agent down
+
+LABEL="$RAPTOR_LABEL_PREFIX.keep-awake"
+
+HEALTH="${RAPTOR_HEALTH_URL:-$RAPTOR_BACKEND_URL/actuator/health/capture}"
+INTERVAL="${RAPTOR_KEEP_AWAKE_INTERVAL:-30}"
+
+# How long to go on holding after raptor last said RECORDING.
+#
+# This is the whole reason the agent is not a one-line `if RECORDING`. A stream
+# that drops mid-match puts the recorder into RECONNECTING, and a container
+# restart takes the endpoint away entirely; in both cases the machine is still
+# very much in the middle of a capture. Releasing on the first poll that does
+# not say RECORDING would let it sleep in precisely the window where a reconnect
+# is trying to happen — and a sleeping machine does not reconnect.
+LINGER="${RAPTOR_KEEP_AWAKE_LINGER:-600}"
+
+held_pid=""
+
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+
+hold() {
+	if [[ -n "$held_pid" ]] && kill -0 "$held_pid" 2>/dev/null; then
+		return
+	fi
+	# -i idle sleep, -s system sleep. -w our own pid so a caffeinate can never
+	# outlive the agent that asked for it: one left behind by a crash is an awake
+	# machine nobody can account for.
+	caffeinate -i -s -w $$ &
+	held_pid=$!
+	log "holding a power assertion (caffeinate $held_pid) — raptor is recording"
+}
+
+release() {
+	[[ -n "$held_pid" ]] || return 0
+	kill "$held_pid" 2>/dev/null
+	wait "$held_pid" 2>/dev/null
+	log "released the power assertion: $1"
+	held_pid=""
+}
+
+watch() {
+	log "watching $HEALTH every ${INTERVAL}s (linger ${LINGER}s)"
+	trap 'release "the agent is stopping"' EXIT
+	trap 'exit 0' INT TERM
+
+	local last_recording=0 now body
+	while true; do
+		body="$(curl -sf --max-time 5 "$HEALTH" 2>/dev/null)"
+		now="$(date +%s)"
+		if [[ "$body" == *'"state":"RECORDING"'* ]]; then
+			last_recording="$now"
+			hold
+		elif (( last_recording > 0 && now - last_recording < LINGER )); then
+			: # Still inside the linger: a reconnect or a restart, not an idle machine.
+		else
+			release "raptor has not been recording for ${LINGER}s"
+		fi
+		sleep "$INTERVAL"
+	done
+}
+
+status() {
+	launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 \
+		&& echo "$LABEL: loaded" || echo "$LABEL: not loaded"
+	echo "raptor: $(curl -sf --max-time 5 "$HEALTH" 2>/dev/null || echo unreachable)"
+	# The count, and the holders. A holder with a timeout is not cover for a
+	# night, so the second line is the one that actually answers the question.
+	pmset -g assertions | grep -E "PreventUserIdleSystemSleep|caffeinate"
+	echo "log: $RAPTOR_STATE_DIR/keep-awake.log (path is set by the plist)"
+}
+
+case "${1:-watch}" in
+	watch) watch ;;
+	--status) status ;;
+	*) echo "usage: $(basename "$0") [--status]   (deploy with bin/deploy-agents)" >&2
+	   exit 2 ;;
+esac

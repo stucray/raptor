@@ -33,6 +33,13 @@ is set and Betfair credentials (`BETFAIR_APP_KEY`, `BETFAIR_USERNAME`,
 Custody files are read from `RAPTOR_DATA_ROOT`, and which leagues to capture
 from `config/capture.properties`.
 
+## Operate
+
+The watchers that must outlive the application — heartbeat, keep-awake, backup,
+restore drill and the nightly close-out trigger — are launchd agents, configured
+by an `ops.env` that keeps every path and label out of the repository. See
+[docs/ops.md](docs/ops.md).
+
 ## Tests and data
 
 No Betfair data is committed. The tests read synthetic samples (market ids

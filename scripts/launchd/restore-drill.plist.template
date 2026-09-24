@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@LABEL@</string>
+
+    <!-- Runs the copy in the state directory (RAPTOR_STATE_DIR), not the one in the repo: a branch checkout
+         must not be able to delete or rewrite it mid-run. See the DEPLOY block
+         in scripts/raptor-restore-drill.sh; keep the two in sync. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@STATE_DIR@/raptor-restore-drill.sh</string>
+        <string>--scheduled</string>
+    </array>
+
+    <!-- 06:11Z (RAPTOR_RESTORE_DRILL_UTC), twenty-four minutes after the nightly
+         backup at 05:47Z, so it drills a dump written the same
+         morning rather than yesterday's.
+
+         bin/deploy-agents converts the UTC setting into this machine's local
+         hour and minute, because StartCalendarInterval is LOCAL.
+         The UTC figure is the one that matters, and getting that wrong is how
+         the backup first shipped firing at 20:30Z, mid-card. 06:11Z is after
+         the previous day's football has finished (last kickoffs 19:00Z, done
+         by ~21:00Z) and before scope opens for the next (4h horizon, earliest
+         observed kickoff 11:00Z, so ~07:00Z). Measured end-to-end at about two
+         minutes, so it clears that window with an hour to spare.
+
+         Weekly, not nightly: the drill stands up a second Postgres and restores
+         the whole corpus into it, and the thing it guards against — a restore
+         path that has silently stopped working — does not change daily.
+
+         SO WHY IS THIS FIRING EVERY DAY (#279)? Because the weekly cadence is
+         right for a GREEN drill and badly wrong for a red one — a verdict that
+         can only re-answer in seven days stops carrying information long before
+         it clears, and the one that prompted this sat red for a week over a
+         partition created three minutes after the dump. `--scheduled` above is
+         what tells the script this is the timer and not a person: on any day
+         that is not the weekly one it exits immediately unless the last verdict
+         was not OK. The cadence therefore lives in the script, where it can
+         depend on the state file, and this entry is just a daily heartbeat.
+         Keep the two in sync — DRILL_WEEKLY_DAY defaults to 7 (Sunday, %u),
+         which is the Weekday 0 this entry used to name. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>@HOUR@</integer>
+        <key>Minute</key>
+        <integer>@MINUTE@</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@STATE_DIR@/restore-drill.log</string>
+    <key>StandardErrorPath</key>
+    <string>@STATE_DIR@/restore-drill.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>
