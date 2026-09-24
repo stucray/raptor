@@ -244,6 +244,62 @@ class ProjectCaptureLedgerIntegrationTest {
 	}
 
 	/**
+	 * A session that ended while nothing refreshed the ledger is still seen to
+	 * have ended (paddock#337).
+	 *
+	 * <p>The shape is what happened seven times on the live database: the ledger
+	 * derived the session while it was open, then the recorder stopped — which is
+	 * exactly when this in-process refresh stops too — and the next refresh came
+	 * more than FREEZE_GRACE after {@code ended_at}. The row was not missing and
+	 * no spill arrived, so nothing called it stale, and the screen said "still
+	 * running" for days. Ended weeks before the test's clock here, so no window
+	 * can be what rescues it: only comparing the row with its source can.
+	 */
+	@Test
+	void aSessionThatEndedWhileNothingRefreshedIsSeenToHaveEnded() throws Exception {
+		run();
+		assertThat(instant("ended_at", empty)).as("derived while open").isNull();
+
+		Instant ended = START.plusSeconds(7300);
+		jdbc.sql("update raw.capture_session set ended_at = ?, exit_status = 'COMPLETED' where id = ?")
+				.params(at(ended), empty)
+				.update();
+
+		run();
+
+		assertThat(instant("ended_at", empty)).isEqualTo(ended);
+		assertThat(text("select exit_status from ledger.capture_session where session_id = ?", empty))
+				.isEqualTo("COMPLETED");
+	}
+
+	/**
+	 * The same freeze for a scoped market: derived while LIVE, left scope, and no
+	 * refresh inside the grace. Not yet seen on the live database (0 of 2,798 on
+	 * 2026-09-24), but the predicate had the same shape, so it had the same hole.
+	 */
+	@Test
+	void aMarketThatLeftScopeWhileNothingRefreshedIsSeenToHaveLeft() throws Exception {
+		scoped("1.5", true, "LIVE", null);
+		run();
+		assertThat(text("select state from ledger.market_scope where market_id = ?", "1.5"))
+				.isEqualTo("LIVE");
+
+		jdbc.sql("""
+						update raw.market_scope
+						set state = 'DONE', exit_reason = 'CLOSED', state_changed_at = ?
+						where market_id = '1.5'""")
+				.params(at(START.plusSeconds(3600)))
+				.update();
+
+		run();
+
+		assertThat(text("select state from ledger.market_scope where market_id = ?", "1.5"))
+				.isEqualTo("DONE");
+		assertThat(text("select exit_reason from ledger.market_scope where market_id = ?", "1.5"))
+				.isEqualTo("CLOSED");
+	}
+
+	/**
 	 * A message the exchange published just before the recorder opened the session
 	 * still counts.
 	 *
@@ -356,6 +412,10 @@ class ProjectCaptureLedgerIntegrationTest {
 						"select " + column + " from ledger.capture_session where session_id = ?")
 				.param(sessionId).query(OffsetDateTime.class).optional().orElse(null);
 		return value == null ? null : value.toInstant();
+	}
+
+	private String text(String sql, Object key) {
+		return jdbc.sql(sql).param(key).query(String.class).optional().orElse(null);
 	}
 
 	private long count(String sql) {
