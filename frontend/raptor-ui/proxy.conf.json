@@ -1,0 +1,10 @@
+{
+  "/api": {
+    "target": "http://localhost:8087",
+    "secure": false
+  },
+  "/actuator": {
+    "target": "http://localhost:8087",
+    "secure": false
+  }
+}

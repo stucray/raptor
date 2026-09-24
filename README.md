@@ -33,6 +33,12 @@ is set and Betfair credentials (`BETFAIR_APP_KEY`, `BETFAIR_USERNAME`,
 Custody files are read from `RAPTOR_DATA_ROOT`, and which leagues to capture
 from `config/capture.properties`.
 
+The operational screens are an Angular app in `frontend/raptor-ui`: `npm ci`
+then `npx ng serve` there proxies `/api` to 8087. `docker compose --profile
+app up` serves it on 8089. The screens read `raw` and the ledger only, as the
+read identity, and never `query`: whether capture is running must be
+answerable without anything downstream.
+
 ## Operate
 
 The watchers that must outlive the application — heartbeat, keep-awake, backup,

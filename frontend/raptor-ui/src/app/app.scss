@@ -1,0 +1,39 @@
+:host {
+  display: block;
+  max-inline-size: 72rem;
+  margin-inline: auto;
+  padding: 1rem 1.5rem;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 2rem;
+  border-block-end: 1px solid light-dark(#ddd, #333);
+  padding-block-end: 0.75rem;
+
+  h1 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+
+  nav {
+    display: flex;
+    gap: 1.25rem;
+
+    a {
+      text-decoration: none;
+      color: inherit;
+      opacity: 0.7;
+
+      &.active {
+        opacity: 1;
+        font-weight: 600;
+      }
+    }
+  }
+}
+
+main {
+  padding-block: 1.5rem;
+}

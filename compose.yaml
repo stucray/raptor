@@ -154,5 +154,22 @@ services:
     ports:
       - "127.0.0.1:8087:8080"
 
+  frontend:
+    build: frontend/raptor-ui
+    # Not load-bearing — the UI being down loses nothing — but a stack that
+    # comes back in two thirds is a worse thing to wake up to than one that
+    # comes back whole.
+    restart: unless-stopped
+    profiles:
+      - app
+    depends_on:
+      - backend
+    # 8089 while this is a development stack: 8086 is paddock's UI and 8088
+    # overround-analysis's. The cutover (#323) decides the port the operator
+    # keeps, together with the backend's 8087, which overround-analysis's
+    # backend also publishes.
+    ports:
+      - "127.0.0.1:8089:80"
+
 volumes:
   postgres-data:
