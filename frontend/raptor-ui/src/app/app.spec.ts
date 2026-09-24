@@ -16,12 +16,12 @@ describe('App', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('renders health as the only screen; the parsed-data screens left in #317 and #318', () => {
+  it('renders the operational screens, and none that shows parsed data (paddock#321)', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
     const links = Array.from(
       fixture.nativeElement.querySelectorAll('nav a'),
     ).map((a) => (a as HTMLAnchorElement).textContent?.trim());
-    expect(links).toEqual(['Health']);
+    expect(links).toEqual(['Health', 'Scope', 'Gaps', 'Source files']);
   });
 });
