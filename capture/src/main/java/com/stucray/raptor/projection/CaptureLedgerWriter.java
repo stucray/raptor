@@ -103,6 +103,13 @@ class CaptureLedgerWriter {
 	 * deleted the ledger would still be correct, and if a fifteen-minute window
 	 * were ever the only thing standing between this and a wrong number, that would
 	 * be the bug.
+	 *
+	 * <p><b>It was, once, and it was (paddock#337).</b> A session's ending reached
+	 * the ledger only through this window, and a session ends when the recorder
+	 * stops — which is when this in-process refresh stops too. Seven sessions on
+	 * the live database ended with no refresh inside fifteen minutes and stayed
+	 * "still running" in the ledger for days. The stale queries now also compare
+	 * each row with its source, so the claim above holds again.
 	 */
 	private static final String FREEZE_GRACE = "15 minutes";
 
@@ -241,8 +248,21 @@ class CaptureLedgerWriter {
 				or s.ended_at > now() - cast(:grace as interval)
 				or not exists (
 					select 1 from ledger.capture_session q where q.session_id = s.id)
+				-- The row disagrees with its source: most often a session that ended
+				-- while nothing refreshed, because the refresh runs in the process
+				-- whose stopping is what ended it (paddock#337). Every column the
+				-- ledger copies verbatim is compared, so no window has to guess when
+				-- raw last moved.
+				or exists (
+					select 1 from ledger.capture_session q
+					where q.session_id = s.id
+						and (q.source_key, q.started_at, q.ended_at, q.origin, q.exit_status,
+								q.exit_detail, q.build_version, q.config_json)
+							is distinct from
+							(s.source_key, s.started_at, s.ended_at, s.origin, s.exit_status,
+								s.exit_detail, s.build_version, s.config_json))
 				-- A spill replayed after this row was derived. THIS is the guard that
-				-- matters; see FREEZE_GRACE.
+				-- matters for the counts; see FREEZE_GRACE.
 				or exists (
 					select 1
 					from raw.spill_file f
@@ -269,6 +289,19 @@ class CaptureLedgerWriter {
 				or s.state_changed_at > now() - cast(:grace as interval)
 				or not exists (
 					select 1 from ledger.market_scope q where q.market_id = s.market_id)
+				-- The row disagrees with its source: a market that left scope while
+				-- nothing refreshed would otherwise stay as it was last derived
+				-- (paddock#337, the same hole as the sessions').
+				or exists (
+					select 1 from ledger.market_scope q
+					where q.market_id = s.market_id
+						and (q.event_id, q.event_name, q.competition_id, q.competition_name,
+								q.market_type, q.country_code, q.kickoff, q.requested, q.state,
+								q.exit_reason, q.first_seen_at, q.state_changed_at, q.in_play_since)
+							is distinct from
+							(s.event_id, s.event_name, s.competition_id, s.competition_name,
+								s.market_type, s.country_code, s.kickoff, s.requested, s.state,
+								s.exit_reason, s.first_seen_at, s.state_changed_at, s.in_play_since))
 				-- Any spill replayed after this row was derived. Not correlated to the
 				-- market, because `raw.spill_file` records the session and one file can
 				-- carry messages for every market that session held — so the honest
