@@ -55,7 +55,7 @@ server:
   # Localhost-only by design (PRD: no auth in v1; binding beyond localhost
   # brings auth in first). The container profile overrides via SERVER_ADDRESS.
   address: 127.0.0.1
-  port: 8087
+  port: 8085
   # See spring.lifecycle above: in-flight acquisition work finishes rather than
   # being cut off mid-write.
   shutdown: graceful
@@ -112,7 +112,7 @@ raptor:
     # The restricted identity is Spring's @Primary, so anything that does not
     # ask for @Acquisition explicitly gets it. That is the safe direction for a
     # default to point.
-    url: ${RAPTOR_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:5434/paddock}
+    url: ${RAPTOR_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:5433/paddock}
     owner:
       username: ${RAPTOR_DATASOURCE_USERNAME:paddock}
       password: ${RAPTOR_DATASOURCE_PASSWORD:dev}

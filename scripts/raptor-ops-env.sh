@@ -43,7 +43,7 @@ unset raptor_line raptor_key raptor_val
 # --- the defaults: raptor's own compose.yaml, and nothing personal ----------
 : "${RAPTOR_STATE_DIR:=$HOME/.raptor}"
 : "${RAPTOR_LABEL_PREFIX:=local.raptor}"
-: "${RAPTOR_BACKEND_URL:=http://127.0.0.1:8087}"
+: "${RAPTOR_BACKEND_URL:=http://127.0.0.1:8085}"
 : "${RAPTOR_POSTGRES_CONTAINER:=raptor-postgres-1}"
 : "${RAPTOR_BACKEND_CONTAINER:=raptor-backend-1}"
 : "${RAPTOR_FRONTEND_CONTAINER:=raptor-frontend-1}"

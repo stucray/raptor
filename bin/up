@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Build the image and start raptor's whole stack: database, backend, UI.
+#
+# The Betfair credentials come from the sops file named by RAPTOR_SECRETS
+# (environment, else ~/.raptor/ops.env — see docs/ops.md) and exist only for the
+# lifetime of `sops exec-env`: they reach the containers' environment and are
+# never written to disk. Without the file the stack still starts, and the
+# recorder says it has no credentials rather than pretending to capture.
+#
+# The database volume is external and is never created here (see compose.yaml):
+# if it is missing, `up` fails, which is the point.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source scripts/raptor-ops-env.sh
+
+./mvnw -q install -DskipTests
+./mvnw -q -pl app spring-boot:build-image -DskipTests \
+  -Dspring-boot.build-image.imageName=ghcr.io/stucray/raptor:local
+
+bin/deploy-agents --check || true
+
+if [[ -n "$RAPTOR_SECRETS" && -r "$RAPTOR_SECRETS" ]] && command -v sops >/dev/null; then
+  exec sops exec-env "$RAPTOR_SECRETS" '
+    BETFAIR_APP_KEY="$(printenv betfair-app-key-live)" \
+    BETFAIR_USERNAME="$(printenv betfair-username)" \
+    BETFAIR_PASSWORD="$(printenv betfair-password)" \
+    BETFAIR_CERT_PEM_B64="$(printenv betfair-cert-pem | base64 | tr -d "\n")" \
+    BETFAIR_KEY_PEM_B64="$(printenv betfair-key-pem | base64 | tr -d "\n")" \
+    docker compose --profile app up -d --build
+    echo "raptor UI:       http://localhost:8086"
+    echo "backend health:  http://localhost:8085/actuator/health"'
+fi
+
+echo "note: RAPTOR_SECRETS (${RAPTOR_SECRETS:-unset}) not readable, or sops missing —"
+echo "      starting without Betfair credentials; the recorder will not capture."
+docker compose --profile app up -d --build
+echo "raptor UI:       http://localhost:8086"
+echo "backend health:  http://localhost:8085/actuator/health"
