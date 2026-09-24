@@ -26,16 +26,21 @@ application).
     ./mvnw install -DskipTests
     ./mvnw -pl app spring-boot:run
 
-This starts a local PostgreSQL through `compose.yaml` on port 5434, and the
-application on 8087. The recorder stays off unless `RAPTOR_STREAM_ENABLED=true`
+This starts PostgreSQL through `compose.yaml` on port 5433, and the application
+on 8085 — the ports of the resident stack, so on a machine already running it,
+set `SERVER_PORT` to something else and remember the database is the live one.
+The volume is external and must exist first (`docker volume create
+raptor_postgres-data`; see `compose.yaml` for why compose will not create it). The recorder stays off unless `RAPTOR_STREAM_ENABLED=true`
 is set and Betfair credentials (`BETFAIR_APP_KEY`, `BETFAIR_USERNAME`,
 `BETFAIR_PASSWORD`, `BETFAIR_CERT_PEM_B64`, `BETFAIR_KEY_PEM_B64`) are present.
 Custody files are read from `RAPTOR_DATA_ROOT`, and which leagues to capture
 from `config/capture.properties`.
 
 The operational screens are an Angular app in `frontend/raptor-ui`: `npm ci`
-then `npx ng serve` there proxies `/api` to 8087. `docker compose --profile
-app up` serves it on 8089. The screens read `raw` and the ledger only, as the
+then `npx ng serve` there proxies `/api` to 8085. `bin/up` builds the image and
+starts the whole stack (UI on 8086), with the recorder ON; `bin/down` stops the
+application and leaves the database running. Set `RAPTOR_DATA_ROOT` (the host
+custody root) in a `.env` beside `compose.yaml`. The screens read `raw` and the ledger only, as the
 read identity, and never `query`: whether capture is running must be
 answerable without anything downstream.
 

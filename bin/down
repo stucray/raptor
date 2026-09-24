@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stop raptor's application — backend and UI — and LEAVE THE DATABASE RUNNING.
+#
+# raptor must never stop the database it writes to: other readers share it, and
+# a stopped database is how a Ctrl-C becomes lost capture. To stop PostgreSQL
+# deliberately, and only with nothing in scope: `docker compose stop postgres`.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+docker compose --profile app rm --stop --force backend frontend

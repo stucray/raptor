@@ -1,18 +1,20 @@
-# raptor's local stack.
+# raptor's stack: the live capture application and the database it writes.
 #
-# BEFORE THE CUTOVER (#323) THIS IS A DEVELOPMENT STACK, AND IT IS KEPT APART
-# FROM THE LIVE ONE ON PURPOSE. Its own compose project (`name: raptor`, so its
-# own volume) and its own host ports (5434, 8087), so starting it can never
-# reach the database paddock is capturing into, and the recorder is OFF by
-# default here. The cutover repoints raptor at the existing database and
-# volume; that is a deliberate, rehearsed step, not something a `docker
-# compose up` in the wrong directory should be able to do.
+# Since the cutover (#323) this IS the resident stack. Its host ports are the
+# ones the operator's tools already call — 5433 (PostgreSQL), 8085 (backend),
+# 8086 (UI) — inherited from the application raptor replaced, so `lid`, the
+# launchd watchers and anyone's bookmarks did not have to move.
 #
+# Full app:   `bin/up` builds the image and starts everything; `bin/down` stops
+#             the application and LEAVES THE DATABASE RUNNING.
 # Dev loop:   `./mvnw -pl app spring-boot:run` auto-starts `postgres` via
-#             spring-boot-docker-compose. Lifecycle management is
-#             `start-only`: quitting the app LEAVES `postgres` RUNNING, because
-#             a resident recorder must never lose its database to a Ctrl-C.
-#             Stop it deliberately with `docker compose stop postgres`.
+#             spring-boot-docker-compose and does NOT open a stream (the
+#             application.yml default is off; only this file turns it on).
+#             Lifecycle management is `start-only`: quitting the app LEAVES
+#             `postgres` RUNNING, because a resident recorder must never lose
+#             its database to a Ctrl-C. On a machine where the stack is running,
+#             the dev loop is talking to the system of record; run it on
+#             another SERVER_PORT, since 8085 is the container's.
 #
 # All published ports bind 127.0.0.1 only. raptor has no authentication; if it
 # ever binds beyond localhost, auth goes in first.
@@ -42,7 +44,7 @@ services:
       POSTGRES_USER: paddock
       POSTGRES_PASSWORD: dev
     ports:
-      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -107,13 +109,20 @@ services:
       BETFAIR_CERT_PEM_B64: ${BETFAIR_CERT_PEM_B64:-}
       BETFAIR_KEY_PEM_B64: ${BETFAIR_KEY_PEM_B64:-}
       # The switch that makes this instance open a Betfair stream and write the
-      # system of record. OFF by default until the cutover (#323): before it,
-      # paddock is the live recorder, and a second stream on the same app key is
-      # not something a development stack should open unasked. The cutover flips
-      # this default to true, for the reason paddock learned twice (a default
-      # that stands the recorder down silently ends the night; a duplicate is
-      # what the capture lease refuses).
-      RAPTOR_STREAM_ENABLED: ${RAPTOR_STREAM_ENABLED:-false}
+      # system of record. ON BY DEFAULT in the container, since the cutover
+      # (#323): this process is the only thing capturing, and a default that
+      # stands it down means the documented restart command silently ends the
+      # night — which is exactly what happened to the application raptor
+      # replaced, twice, before its own default was flipped. The safe direction
+      # for a default is the one whose failure is a duplicate session, and a
+      # duplicate is what the capture lease refuses. To run without capturing:
+      #
+      #     RAPTOR_STREAM_ENABLED=false bin/up
+      #
+      # This line governs ONLY the container. application.yml defaults the same
+      # property to false on purpose, so a dev-loop `spring-boot:run` does not
+      # open a stream. The two defaults look alike and are not.
+      RAPTOR_STREAM_ENABLED: ${RAPTOR_STREAM_ENABLED:-true}
       # THE POWER ASSERTION CANNOT WORK IN HERE. `caffeinate` is a macOS binary
       # and this is a Linux container, so the assertion paddock holds while a
       # market is in-play has nothing to hold. Said explicitly rather than left
@@ -152,7 +161,7 @@ services:
       # Docker rather than by review.
       - ${RAPTOR_DATA_ROOT:-${HOME}/raptor/data}/football-data.co.uk:/custody/football-data.co.uk
     ports:
-      - "127.0.0.1:8087:8080"
+      - "127.0.0.1:8085:8080"
 
   frontend:
     build: frontend/raptor-ui
@@ -164,12 +173,27 @@ services:
       - app
     depends_on:
       - backend
-    # 8089 while this is a development stack: 8086 is paddock's UI and 8088
-    # overround-analysis's. The cutover (#323) decides the port the operator
-    # keeps, together with the backend's 8087, which overround-analysis's
-    # backend also publishes.
     ports:
-      - "127.0.0.1:8089:80"
+      - "127.0.0.1:8086:80"
 
 volumes:
+  # EXTERNAL, so compose never creates it and never removes it (#323).
+  #
+  # Never creates it: a missing volume fails `up` loudly instead of initialising
+  # an empty cluster that the backend would then migrate from nothing and the
+  # recorder would happily write into — a second, empty system of record that
+  # looks healthy. Create it deliberately, once:
+  #
+  #     docker volume create raptor_postgres-data
+  #
+  # Never removes it: `docker compose down -v` cannot delete an external volume,
+  # so no command in this directory can take the database with it.
+  #
+  # And it is named for raptor alone. At the cutover the data directory was
+  # COPIED here from the previous application's volume rather than shared with
+  # it: two compose projects naming one volume would let a stray `up` in the
+  # other checkout start a second PostgreSQL on the same data directory, which
+  # the postmaster.pid lock does not reliably prevent across containers.
   postgres-data:
+    external: true
+    name: raptor_postgres-data
