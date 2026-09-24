@@ -40,7 +40,10 @@ The operational screens are an Angular app in `frontend/raptor-ui`: `npm ci`
 then `npx ng serve` there proxies `/api` to 8085. `bin/up` builds the image and
 starts the whole stack (UI on 8086), with the recorder ON; `bin/down` stops the
 application and leaves the database running. Set `RAPTOR_DATA_ROOT` (the host
-custody root) in a `.env` beside `compose.yaml`. The screens read `raw` and the ledger only, as the
+custody root) in `~/.raptor/ops.env`, which `bin/up` exports — not in a `.env`
+here, which the no-Betfair-data scan refuses because it names a home directory.
+A bare `docker compose up` does not read ops.env and mounts the default
+`~/raptor/data` instead, so start the stack with `bin/up`. The screens read `raw` and the ledger only, as the
 read identity, and never `query`: whether capture is running must be
 answerable without anything downstream.
 
