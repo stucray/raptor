@@ -72,3 +72,26 @@ neither alert nor restart anything.
 Plug in before capture. `caffeinate -s` is void on battery by design, and
 closing the lid on battery sleeps the machine whatever assertion is held — which
 is what `lid` is for.
+
+## Accepted risk: every copy is on one machine
+
+`raw` is unreplayable. Betfair's stream replay covers minutes, not days, so a
+match that was not recorded, or whose recording is lost, never existed. The
+`backup` agent keeps a verified nightly `pg_dump` of `raw`, and `restore-drill`
+proves each week that it restores. That covers the probable failures: a Docker
+Desktop reset, a removed volume, database corruption, a bad migration.
+
+It does **not** cover losing the machine. The database volume and every dump
+sit on the same internal disk, so a disk failure, or the laptop being lost or
+stolen, loses all of it. An off-machine copy (another disk or a remote store)
+is the next rung. It is deliberately not built yet: this is a decision to
+accept the risk for now, not an oversight, and this section is where to change
+that decision.
+
+Two consequences follow:
+
+- The backup covers `raw` only, by design. `ledger`, `query` and `batch` are
+  rebuilt from it. Any schema in the same database that another application
+  owns, and that cannot be rebuilt from `raw`, is that application's to back up.
+- A backup directory on the same disk is a convenience, not a second copy. Do
+  not count it as one when judging what a failure would cost.
