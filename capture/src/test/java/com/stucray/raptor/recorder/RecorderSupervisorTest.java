@@ -458,6 +458,36 @@ class RecorderSupervisorTest {
 		});
 	}
 
+	/**
+	 * ...and clears it while the writing session is still OPEN (#13).
+	 *
+	 * <p>The test above ends its good session, which is the one moment the old
+	 * reset ran, so it could not see this. On 2026-09-25 four dead attempts were
+	 * followed by a healthy session that recorded for hours, and capture health
+	 * read OUT_OF_SERVICE for all of it — with the heartbeat's restart of a
+	 * healthy recorder one cooldown away. A session that never ends is the shape
+	 * of a match in progress.
+	 */
+	@Test
+	@Timeout(30)
+	void aSessionStillRecordingClearsTheCountBeforeItEnds() {
+		when(lease.acquire()).thenReturn(true);
+		AtomicInteger opened = new AtomicInteger();
+		supervisor = supervisor(factory(() ->
+				opened.getAndIncrement() < 2 ? finite(0) : endless()), true);
+
+		supervisor.start();
+
+		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+			RecorderSupervisor current = supervisor;
+			assertThat(current).isNotNull();
+			Recording recording = current.current();
+			assertThat(recording).isNotNull();
+			assertThat(recording.written()).isPositive();
+			assertThat(current.consecutiveFailedAttempts()).isZero();
+		});
+	}
+
 
 	/**
 	 * The arithmetic, at its exact values.
