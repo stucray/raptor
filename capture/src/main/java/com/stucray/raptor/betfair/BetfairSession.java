@@ -2,6 +2,7 @@ package com.stucray.raptor.betfair;
 
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Map;
 import javax.net.ssl.SSLContext;
@@ -46,6 +47,16 @@ class BetfairSession {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
+	/**
+	 * How long a login may take to connect, and then to answer (#12).
+	 *
+	 * <p>The stream's own order, and for the same reason: a network that has
+	 * gone away should cost an attempt, not an unbounded wait. Without it one
+	 * login held for four minutes on 2026-09-25, inside a synchronized method,
+	 * with the stream attempt queued behind it.
+	 */
+	static final Duration LOGIN_TIMEOUT = Duration.ofSeconds(30);
+
 	private final BetfairProperties properties;
 	private final RestClient.Builder builder;
 	private final RestClient identity;
@@ -84,11 +95,25 @@ class BetfairSession {
 			return current;
 		}
 		RestClient built = builder.clone()
-				.requestFactory(new JdkClientHttpRequestFactory(
-						HttpClient.newBuilder().sslContext(sslContext(properties)).build()))
+				.requestFactory(loginRequestFactory(sslContext(properties), LOGIN_TIMEOUT))
 				.build();
 		certLogin = built;
 		return built;
+	}
+
+	/**
+	 * The certificate-carrying request factory, bounded at both ends.
+	 *
+	 * <p>{@code HttpClient}'s default connect timeout is none, and so is the
+	 * request factory's read timeout: each has to be said, and each covers a
+	 * different stall (a network that does not answer the SYN, and a server that
+	 * accepted and went quiet).
+	 */
+	static JdkClientHttpRequestFactory loginRequestFactory(SSLContext sslContext, Duration timeout) {
+		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(
+				HttpClient.newBuilder().sslContext(sslContext).connectTimeout(timeout).build());
+		factory.setReadTimeout(timeout);
+		return factory;
 	}
 
 	/**

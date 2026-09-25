@@ -82,6 +82,19 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 	@Override
 	public StreamSource open() throws IOException {
 		awaitScope();
+		// The token BEFORE the socket (#12). The authentication message needs it,
+		// and Betfair starts timing an unauthenticated connection the moment it
+		// accepts one: a login that takes a while on a bad network then costs the
+		// connection as well. Done first, a slow login costs only itself.
+		//
+		// And as an IOException, because that is what the supervisor retries. A
+		// BetfairException is unchecked, and escaping its loop would end the
+		// supervisor thread and leave the recorder saying RECONNECTING forever.
+		try {
+			session.token();
+		} catch (BetfairException e) {
+			throw new IOException("Betfair login failed before connecting: " + e.getMessage(), e);
+		}
 		TlsStreamSource previous = last;
 		SSLSocket socket = connect();
 		TlsStreamSource source = new TlsStreamSource(

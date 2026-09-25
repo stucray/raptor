@@ -6,8 +6,16 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import javax.net.ssl.SSLContext;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.ExpectedCount;
@@ -37,6 +45,45 @@ class BetfairSessionTest {
 
 	private final RestClient.Builder builder = RestClient.builder();
 	private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+
+	/**
+	 * A login that gets no answer gives up, instead of holding every caller (#12).
+	 *
+	 * <p>The certificate-login client had no connect or read timeout, and
+	 * {@code login()} is synchronized: on 2026-09-25 one login waited four minutes
+	 * on a failing network while the stream attempt queued behind it. A listener
+	 * that accepts and never replies is that network, minus the wait.
+	 */
+	@Test
+	@Timeout(10)
+	void aLoginThatGetsNoAnswerTimesOut() throws Exception {
+		List<Socket> held = new ArrayList<>();
+		try (ServerSocket silent = new ServerSocket(0)) {
+			Thread.ofVirtual().start(() -> {
+				while (!silent.isClosed()) {
+					try {
+						held.add(silent.accept());   // accepted, and never answered
+					} catch (IOException closed) {
+						return;
+					}
+				}
+			});
+			RestClient client = RestClient.builder()
+					.requestFactory(BetfairSession.loginRequestFactory(SSLContext.getDefault(),
+							Duration.ofMillis(500)))
+					.build();
+
+			assertThatThrownBy(() -> client.post()
+					.uri("http://127.0.0.1:" + silent.getLocalPort() + "/api/certlogin")
+					.retrieve()
+					.body(String.class))
+					.hasRootCauseInstanceOf(java.net.http.HttpTimeoutException.class);
+		} finally {
+			for (Socket socket : held) {
+				socket.close();
+			}
+		}
+	}
 
 	@Test
 	void logsInOnceAndReusesTheToken() {
