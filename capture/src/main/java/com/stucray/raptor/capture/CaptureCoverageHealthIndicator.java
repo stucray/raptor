@@ -137,12 +137,13 @@ import org.springframework.stereotype.Component;
  * {@link DiscoveryReport#consecutivePollFailures()} is what stops the swallow
  * being silent.
  *
- * <p><b>What is reported and deliberately not judged.</b> Unresolved league
- * names and a long-empty scope are on the payload and turn nothing red.
- * {@code listCompetitions} lists only competitions that currently have markets,
- * so a league between rounds legitimately does not resolve, and an indicator
- * that fired on that would go red every international break — the exact failure
- * this class exists to avoid. Same for the empty-scope clock: a real break is
+ * <p><b>What is reported and deliberately not judged.</b> Leagues with no open
+ * markets, ambiguous league names and a long-empty scope are on the payload and
+ * turn nothing red. {@code listCompetitions} lists only competitions that
+ * currently have markets, so a league between rounds is legitimately absent, and
+ * an indicator that fired on that would go red every international break — the
+ * exact failure this class exists to avoid. That absence is never a fault at any
+ * duration (#9). Same for the empty-scope clock: a real break is
  * days long, and the threshold that separates it from broken discovery has to
  * be calibrated against a fortnight of real numbers rather than guessed here.
  * Publishing them first is what makes that calibration possible.
@@ -217,7 +218,6 @@ class CaptureCoverageHealthIndicator implements HealthIndicator {
 				.withDetail("secondsInState", inState.toSeconds())
 				.withDetail("consecutiveScopePollFailures", found.consecutivePollFailures())
 				.withDetail("configuredLeagues", found.configuredLeagues())
-				.withDetail("unresolvedLeagues", found.unresolvedLeagues().size())
 				.withDetail("secondsSinceScopeNonEmpty", found.sinceScopeNonEmpty().toSeconds())
 				// How long the current card has been on, which is the denominator
 				// of the stuck test below and is worth reading on its own: it is
@@ -298,10 +298,15 @@ class CaptureCoverageHealthIndicator implements HealthIndicator {
 				// on every end-of-evening lid close is an alert that gets muted,
 				// and the silence is then load-bearing on the night it matters.
 				"live", gap.live())));
-		if (!found.unresolvedLeagues().isEmpty()) {
-			// The names, not just the count: the fix is editing one of them, and a
-			// number sends the reader to the container log to find out which.
-			health.withDetail("unresolvedLeagueNames", found.unresolvedLeagues());
+		if (!found.leaguesWithNoOpenMarkets().isEmpty()) {
+			// Information, not a problem (#9): these leagues have nothing on right
+			// now, are still requested on every poll, and are captured the moment
+			// they have markets again. Nothing here needs fixing.
+			health.withDetail("leaguesWithNoOpenMarkets", found.leaguesWithNoOpenMarkets());
+		}
+		if (!found.ambiguousLeagues().isEmpty()) {
+			// A real problem, and named because the fix is editing the name.
+			health.withDetail("ambiguousLeagues", found.ambiguousLeagues());
 		}
 		if (!reasons.isEmpty()) {
 			health.withDetail("reason", String.join("; and ", reasons));

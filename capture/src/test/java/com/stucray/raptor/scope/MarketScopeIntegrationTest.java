@@ -531,20 +531,22 @@ class MarketScopeIntegrationTest {
 	}
 
 	/**
-	 * League names that did not resolve reach health, not just the container log.
+	 * What became of the league names reaches health, not just the container log.
 	 *
 	 * <p>The catalogue is the only thing that knows them, and the worst case emits
 	 * no query at all — an implementation that resolves nothing has no ids to ask
 	 * about — so the fact travels on the port rather than in the poll's result.
 	 */
 	@Test
-	void discoveryCarriesTheCataloguesUnresolvedLeagueNames() {
-		catalogue.resolution =
-				new MarketCatalogue.LeagueResolution(8, List.of("Scottish Premiership"));
+	void discoveryCarriesTheCataloguesLeagueResolution() {
+		catalogue.resolution = new MarketCatalogue.LeagueResolution(8,
+				List.of("Scottish Premiership"), List.of("Italian Serie A (ambiguous: [1, 2])"));
 
 		assertThat(service.discovery().configuredLeagues()).isEqualTo(8);
-		assertThat(service.discovery().unresolvedLeagues())
+		assertThat(service.discovery().leaguesWithNoOpenMarkets())
 				.containsExactly("Scottish Premiership");
+		assertThat(service.discovery().ambiguousLeagues())
+				.containsExactly("Italian Serie A (ambiguous: [1, 2])");
 	}
 
 	/**

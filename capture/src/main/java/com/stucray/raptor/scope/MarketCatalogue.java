@@ -110,19 +110,28 @@ public interface MarketCatalogue {
 	/**
 	 * What became of the configured league names.
 	 *
+	 * <p>Two lists because they are two different facts (#9). A name that is
+	 * simply not listed is a league with nothing on: {@code listCompetitions}
+	 * returns only competitions that currently have markets, and leagues go
+	 * weeks without them over an international break. That is the normal state
+	 * of a league, never an error. A name listed more than once is positive
+	 * evidence of a problem, since capture cannot tell which one is meant.
+	 *
 	 * @param configured how many names the run asked for
-	 * @param unresolved the ones that matched no single competition, verbatim.
-	 *     Not an error on its own — {@code listCompetitions} lists only
-	 *     competitions that currently have markets, so a league between rounds is
-	 *     legitimately missing.
+	 * @param noOpenMarkets configured names {@code listCompetitions} did not
+	 *     list, verbatim. Neutral information
+	 * @param ambiguous configured names that matched more than one competition,
+	 *     each with the ids it matched. Not captured, and worth a warning
 	 */
-	record LeagueResolution(int configured, List<String> unresolved) {
+	record LeagueResolution(int configured, List<String> noOpenMarkets, List<String> ambiguous) {
 
 		/** Nothing has been asked for yet. */
-		public static final LeagueResolution NONE = new LeagueResolution(0, List.of());
+		public static final LeagueResolution NONE =
+				new LeagueResolution(0, List.of(), List.of());
 
 		public LeagueResolution {
-			unresolved = List.copyOf(unresolved);
+			noOpenMarkets = List.copyOf(noOpenMarkets);
+			ambiguous = List.copyOf(ambiguous);
 		}
 	}
 

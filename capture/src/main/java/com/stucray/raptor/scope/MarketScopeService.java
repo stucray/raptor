@@ -161,7 +161,7 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 
 	/**
 	 * <b>Facts, not a verdict.</b> Only the poll-failure count is unambiguous
-	 * enough to gate on: a name that does not resolve is routine mid-week, and an
+	 * enough to gate on: a league with no open markets is routine mid-week, and an
 	 * empty scope is routine every night. The judgement is
 	 * {@code CaptureCoverageHealthIndicator}'s, and it is deliberately made where
 	 * the recorder's state is visible too.
@@ -174,7 +174,7 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 				: catalogue.resolution();
 		Instant filled = this.scopeNonEmptySince;
 		return new DiscoveryReport(pollFailures.get(), resolved.configured(),
-				resolved.unresolved(),
+				resolved.noOpenMarkets(), resolved.ambiguous(),
 				Duration.between(this.scopeLastNonEmpty, clock.instant()),
 				// ZERO, not null, and it means the same thing a reader wants it to
 				// mean: nothing has been waiting to be captured for any length of

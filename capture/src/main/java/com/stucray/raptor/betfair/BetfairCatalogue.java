@@ -72,6 +72,12 @@ class BetfairCatalogue implements MarketCatalogue {
 	/** Written by {@link #resolve} on the poll thread, read by health on another. */
 	private volatile LeagueResolution resolution = LeagueResolution.NONE;
 
+	/**
+	 * The leagues with no open markets as last logged, so the log says when that
+	 * changes rather than repeating it on every poll (#9). Poll thread only.
+	 */
+	private @Nullable List<String> loggedNoOpenMarkets;
+
 	BetfairCatalogue(BetfairRest rest, CaptureSelection selection, BetfairProperties properties,
 			java.time.Clock clock) {
 		this.rest = rest;
@@ -104,11 +110,9 @@ class BetfairCatalogue implements MarketCatalogue {
 		// Published here and not inside resolve(), because the lookahead query
 		// below resolves the same names on its own schedule and must not overwrite
 		// what `resolution()` is documented to mean: the last DISCOVERY poll.
-		this.resolution = new LeagueResolution(asked.leagues().size(), resolved.missing());
-		if (!resolved.missing().isEmpty()) {
-			log.warn("{} of {} competition name(s) did not resolve and are not being captured: {}",
-					resolved.missing().size(), asked.leagues().size(), resolved.missing());
-		}
+		this.resolution = new LeagueResolution(asked.leagues().size(), resolved.noOpenMarkets(),
+				resolved.ambiguous());
+		report(resolved, asked.leagues().size());
 		List<String> competitionIds = resolved.ids();
 		if (!competitionIds.isEmpty()) {
 			queries.add(new CatalogueQuery(true,
@@ -148,6 +152,34 @@ class BetfairCatalogue implements MarketCatalogue {
 				.toList();
 	}
 
+	/**
+	 * Say what became of the configured names, at the level each deserves (#9).
+	 */
+	private void report(Resolved resolved, int configured) {
+		// A league with nothing on is the normal state of a league, for days at a
+		// time over an international break, so it is information and it is said
+		// once, when it changes (#9). It is still requested on every poll, and is
+		// captured the moment it has markets again.
+		if (!resolved.noOpenMarkets().equals(loggedNoOpenMarkets)
+				&& !(loggedNoOpenMarkets == null && resolved.noOpenMarkets().isEmpty())) {
+			if (resolved.noOpenMarkets().isEmpty()) {
+				log.info("every configured league has open markets");
+			} else {
+				log.info("no open markets for {} of {} configured league(s): {}",
+						resolved.noOpenMarkets().size(), configured,
+						resolved.noOpenMarkets());
+			}
+			loggedNoOpenMarkets = resolved.noOpenMarkets();
+		}
+		// A name matching more than one competition IS a fault: capture cannot
+		// tell which is meant, so it takes neither, every poll, until the name is
+		// made unambiguous. That keeps its warning.
+		if (!resolved.ambiguous().isEmpty()) {
+			log.warn("{} configured league name(s) match more than one competition and are "
+					+ "not being captured: {}", resolved.ambiguous().size(), resolved.ambiguous());
+		}
+	}
+
 	@Override
 	public LeagueResolution resolution() {
 		return this.resolution;
@@ -182,26 +214,34 @@ class BetfairCatalogue implements MarketCatalogue {
 			}
 		}
 		List<String> ids = new ArrayList<>();
-		List<String> missing = new ArrayList<>();
+		List<String> noOpenMarkets = new ArrayList<>();
+		List<String> ambiguous = new ArrayList<>();
 		for (String name : names) {
 			List<String> hits = byName.getOrDefault(name, List.of());
 			if (hits.size() == 1) {
 				ids.add(hits.getFirst());
+			} else if (hits.isEmpty()) {
+				noOpenMarkets.add(name);
 			} else {
-				missing.add(name + (hits.isEmpty() ? "" : " (ambiguous: " + hits + ")"));
+				ambiguous.add(name + " (ambiguous: " + hits + ")");
 			}
 		}
-		// Reported as well as logged. The log line distinguishes a league between
-		// rounds from a league whose name has changed only to somebody reading the
-		// container log at the time; the report reaches health, and health is what
-		// reaches ntfy (#180). The caller decides whether to publish it.
-		return new Resolved(List.copyOf(ids), List.copyOf(missing));
+		// Reported as well as logged: the report reaches health. The caller
+		// decides whether to publish it.
+		//
+		// NOT DONE HERE, deliberately (#9): telling a league with nothing on from
+		// one that has fixtures under a name no longer recognised, say after a
+		// season rollover rename. Absence cannot tell them apart, so it must never
+		// be read as the second; that needs positive evidence, such as a listed
+		// competition closely resembling a configured name, and is deferred to
+		// before the 2027/28 season.
+		return new Resolved(List.copyOf(ids), List.copyOf(noOpenMarkets), List.copyOf(ambiguous));
 	}
 
 	/** What {@link #resolve} found, separated from what gets published about it. */
-	private record Resolved(List<String> ids, List<String> missing) {
+	private record Resolved(List<String> ids, List<String> noOpenMarkets, List<String> ambiguous) {
 
-		static final Resolved NONE = new Resolved(List.of(), List.of());
+		static final Resolved NONE = new Resolved(List.of(), List.of(), List.of());
 	}
 
 	/**

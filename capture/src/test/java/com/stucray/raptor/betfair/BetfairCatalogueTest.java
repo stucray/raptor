@@ -187,6 +187,69 @@ class BetfairCatalogueTest {
 	}
 
 	/**
+	 * A league with no open markets is information, said once, and never a
+	 * warning (#9).
+	 *
+	 * <p>"Italian Serie B" is absent from the fixture, as it was from the real
+	 * response during an international break. On the poll every fifteen minutes
+	 * the old WARN repeated for days; now the state is logged at INFO when it
+	 * changes, and again when the league comes back.
+	 */
+	@Test
+	void aLeagueWithNoOpenMarketsIsInformationSaidOnce() {
+		catalogue.poll(Duration.ofHours(24));
+		catalogue.poll(Duration.ofHours(24));
+
+		assertThat(catalogue.resolution().noOpenMarkets()).containsExactly("Italian Serie B");
+		assertThat(catalogue.resolution().ambiguous()).isEmpty();
+		assertThat(appender.list)
+				.filteredOn(e -> e.getLevel().isGreaterOrEqual(Level.WARN))
+				.extracting(ILoggingEvent::getFormattedMessage)
+				.noneMatch(m -> m.contains("Italian Serie B"));
+		assertThat(appender.list)
+				.filteredOn(e -> e.getFormattedMessage().contains("no open markets"))
+				.singleElement()
+				.extracting(ILoggingEvent::getLevel).isEqualTo(Level.INFO);
+
+		List<Map<String, Object>> back = new ArrayList<>(fixture("list-competitions"));
+		back.add(competition("9000199", "Italian Serie B"));
+		doReturn(back).when(rest).post(eq("listCompetitions/"), any(), any());
+		catalogue.poll(Duration.ofHours(24));
+
+		assertThat(catalogue.resolution().noOpenMarkets()).isEmpty();
+		assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+				.contains("every configured league has open markets");
+	}
+
+	/**
+	 * A name matching more than one competition is positive evidence of a
+	 * problem, so it is still a warning, and is not captured.
+	 */
+	@Test
+	void anAmbiguousLeagueNameStillWarns() {
+		List<Map<String, Object>> twice = new ArrayList<>(fixture("list-competitions"));
+		twice.add(competition("9000199", "English Premier League"));
+		doReturn(twice).when(rest).post(eq("listCompetitions/"), any(), any());
+
+		catalogue.poll(Duration.ofHours(24));
+
+		assertThat(catalogue.resolution().ambiguous())
+				.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+				.startsWith("English Premier League (ambiguous: ");
+		assertThat(appender.list)
+				.filteredOn(e -> e.getLevel() == Level.WARN)
+				.extracting(ILoggingEvent::getFormattedMessage)
+				.anyMatch(m -> m.contains("match more than one competition")
+						&& m.contains("English Premier League"));
+	}
+
+	/** One {@code listCompetitions} node, in the shape of the captured fixture's. */
+	private static Map<String, Object> competition(String id, String name) {
+		return Map.of("competition", Map.of("id", id, "name", name),
+				"competitionRegion", "ITA", "marketCount", 12);
+	}
+
+	/**
 	 * Following a market by id, past the point discovery can see it.
 	 *
 	 * <p>This fixture is what #127 turned on. Discovery pins

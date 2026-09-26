@@ -227,17 +227,16 @@ class CaptureCoverageHealthIndicatorTest {
 	}
 
 	/**
-	 * A league that does not resolve is reported and <b>not</b> judged.
+	 * A league with no open markets is information, and <b>never</b> a fault (#9).
 	 *
 	 * <p>The exclusion that keeps this indicator worth reading.
 	 * {@code listCompetitions} returns only competitions that currently have
-	 * markets, so a league between rounds is legitimately absent — and an
-	 * indicator that went red on that would go red every international break,
-	 * which is the exact failure this class was written to avoid. The names are on
-	 * the payload because the fix is editing one of them.
+	 * markets, so a league between rounds is legitimately absent, for weeks over
+	 * an international break, and an indicator that went red on that would go red
+	 * every break. Published under a neutral name, because nothing needs fixing.
 	 */
 	@Test
-	void namesThatDidNotResolveAreReportedWithoutTurningItRed() {
+	void leaguesWithNoOpenMarketsArePublishedAsInformation() {
 		when(recorder.state()).thenReturn(RecorderState.IDLE);
 		when(census.summarise()).thenReturn(quiet());
 		when(discovery.discovery()).thenReturn(found(0, List.of("Scottish Premiership")));
@@ -245,10 +244,30 @@ class CaptureCoverageHealthIndicatorTest {
 		Health health = indicator.health();
 
 		assertThat(health.getStatus()).isEqualTo(Status.UP);
-		assertThat(health.getDetails()).containsEntry("unresolvedLeagues", 1)
-				.containsEntry("configuredLeagues", 8)
-				.containsEntry("unresolvedLeagueNames", List.of("Scottish Premiership"))
-				.doesNotContainKey("reason");
+		assertThat(health.getDetails()).containsEntry("configuredLeagues", 8)
+				.containsEntry("leaguesWithNoOpenMarkets", List.of("Scottish Premiership"))
+				.doesNotContainKeys("ambiguousLeagues", "unresolvedLeagues",
+						"unresolvedLeagueNames", "reason");
+	}
+
+	/**
+	 * An ambiguous name is a real problem, named so it can be fixed, and still
+	 * does not turn the indicator red: capture of every other league is fine.
+	 */
+	@Test
+	void anAmbiguousLeagueNameIsPublishedByName() {
+		when(recorder.state()).thenReturn(RecorderState.IDLE);
+		when(census.summarise()).thenReturn(quiet());
+		when(discovery.discovery()).thenReturn(new DiscoveryReport(0, 8, List.of(),
+				List.of("Italian Serie A (ambiguous: [1, 2])"), Duration.ofMinutes(20),
+				Duration.ofHours(6)));
+
+		Health health = indicator.health();
+
+		assertThat(health.getStatus()).isEqualTo(Status.UP);
+		assertThat(health.getDetails())
+				.containsEntry("ambiguousLeagues", List.of("Italian Serie A (ambiguous: [1, 2])"))
+				.doesNotContainKey("leaguesWithNoOpenMarkets");
 	}
 
 	/**
@@ -263,7 +282,7 @@ class CaptureCoverageHealthIndicatorTest {
 	void aLongEmptyScopeIsPublishedAndNotJudged() {
 		when(recorder.state()).thenReturn(RecorderState.IDLE);
 		when(census.summarise()).thenReturn(quiet());
-		when(discovery.discovery()).thenReturn(new DiscoveryReport(0, 8, List.of(),
+		when(discovery.discovery()).thenReturn(new DiscoveryReport(0, 8, List.of(), List.of(),
 				Duration.ofDays(9), Duration.ZERO));
 
 		Health health = indicator.health();
@@ -459,17 +478,17 @@ class CaptureCoverageHealthIndicatorTest {
 		assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);
 	}
 
-	private static DiscoveryReport found(int pollFailures, List<String> unresolved) {
+	private static DiscoveryReport found(int pollFailures, List<String> noOpenMarkets) {
 		// A card that has been on for hours, which is what every case written
 		// before #278 assumed without being able to say so: they vary the
 		// recorder's clock and mean "stuck DURING a card".
-		return found(pollFailures, unresolved, Duration.ofHours(6));
+		return found(pollFailures, noOpenMarkets, Duration.ofHours(6));
 	}
 
-	private static DiscoveryReport found(int pollFailures, List<String> unresolved,
+	private static DiscoveryReport found(int pollFailures, List<String> noOpenMarkets,
 			Duration scopeNonEmptyFor) {
-		return new DiscoveryReport(pollFailures, 8, unresolved, Duration.ofMinutes(20),
-				scopeNonEmptyFor);
+		return new DiscoveryReport(pollFailures, 8, noOpenMarkets, List.of(),
+				Duration.ofMinutes(20), scopeNonEmptyFor);
 	}
 
 	private static ScopeProperties scopeProperties() {
