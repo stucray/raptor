@@ -114,8 +114,8 @@
       "class": "BetfairCatalogue",
       "method": "resolve",
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java",
-      "begin_line": 188,
-      "end_line": 188,
+      "begin_line": 221,
+      "end_line": 221,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
@@ -608,7 +608,7 @@
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java",
       "begin_line": 52,
       "end_line": 52,
-      "message": "Possible God Class (WMC=49, ATFD=18, TCC=14.286%)"
+      "message": "Possible God Class (WMC=54, ATFD=20, TCC=15.238%)"
     },
     {
       "rule": "GodClass",
@@ -859,7 +859,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java",
       "begin_line": 52,
-      "end_line": 418,
+      "end_line": 458,
       "message": "This class has too many methods, consider refactoring it."
     },
     {

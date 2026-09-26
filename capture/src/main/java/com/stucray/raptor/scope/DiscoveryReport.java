@@ -19,12 +19,14 @@ import java.util.List;
  *     only honest way to make the swallow visible without changing it. Zero
  *     after any poll that completes.
  * @param configuredLeagues how many competition names the run asked for
- * @param unresolvedLeagues the ones {@code listCompetitions} could not turn into
- *     this season's ids, verbatim, because the name is what a human has to fix.
- *     <b>A non-empty list is not by itself a fault:</b> {@code listCompetitions}
- *     only returns competitions that currently have markets, so a league between
- *     rounds is legitimately absent. It is reported and not judged for exactly
- *     that reason.
+ * @param leaguesWithNoOpenMarkets configured names {@code listCompetitions} did
+ *     not list, verbatim. <b>Never a fault</b> (#9): it lists only competitions
+ *     that currently have markets, so a league between rounds or over an
+ *     international break is legitimately absent, for weeks if need be. Neutral
+ *     information, and still requested on every poll
+ * @param ambiguousLeagues configured names that matched more than one
+ *     competition, with the ids each matched. Positive evidence of a problem:
+ *     capture takes neither until the name is made unambiguous
  * @param sinceScopeNonEmpty how long since a poll last found anything at all.
  *     Informational, never a verdict: a genuine international break is days of
  *     legitimately empty scope, and the threshold that separates it from a
@@ -42,10 +44,11 @@ import java.util.List;
  *     own clock counts hours of correct overnight idleness as a fault.
  */
 public record DiscoveryReport(int consecutivePollFailures, int configuredLeagues,
-		List<String> unresolvedLeagues, Duration sinceScopeNonEmpty,
-		Duration scopeNonEmptyFor) {
+		List<String> leaguesWithNoOpenMarkets, List<String> ambiguousLeagues,
+		Duration sinceScopeNonEmpty, Duration scopeNonEmptyFor) {
 
 	public DiscoveryReport {
-		unresolvedLeagues = List.copyOf(unresolvedLeagues);
+		leaguesWithNoOpenMarkets = List.copyOf(leaguesWithNoOpenMarkets);
+		ambiguousLeagues = List.copyOf(ambiguousLeagues);
 	}
 }
