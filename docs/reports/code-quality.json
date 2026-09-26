@@ -306,8 +306,8 @@
       "class": "TlsStreamSourceFactory",
       "method": "open",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 85,
-      "end_line": 85,
+      "begin_line": 98,
+      "end_line": 98,
       "message": "Ensure that resources like this TlsStreamSource object are closed after use"
     },
     {
@@ -318,8 +318,8 @@
       "class": "TlsStreamSourceFactory",
       "method": "open",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 86,
-      "end_line": 86,
+      "begin_line": 99,
+      "end_line": 99,
       "message": "Ensure that resources like this SSLSocket object are closed after use"
     },
     {
@@ -534,8 +534,8 @@
       "class": "BetfairSession",
       "method": "login",
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairSession.java",
-      "begin_line": 116,
-      "end_line": 116,
+      "begin_line": 141,
+      "end_line": 141,
       "message": "The method 'login()' has a cyclomatic complexity of 11."
     },
     {
@@ -690,8 +690,8 @@
       "class": "BetfairSession",
       "method": "invalidate",
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairSession.java",
-      "begin_line": 113,
-      "end_line": 113,
+      "begin_line": 138,
+      "end_line": 138,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -714,8 +714,8 @@
       "class": "TlsStreamSourceFactory",
       "method": "awaitScope",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 129,
-      "end_line": 129,
+      "begin_line": 142,
+      "end_line": 142,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -918,8 +918,8 @@
       "class": "TlsStreamSourceFactory",
       "method": "open",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 92,
-      "end_line": 103,
+      "begin_line": 105,
+      "end_line": 116,
       "message": "Consider using a try-with-resources statement instead of explicitly closing the resource"
     },
     {
