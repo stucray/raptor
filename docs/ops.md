@@ -53,6 +53,25 @@ branch checkout cannot rewrite or delete a watchdog mid-run. The deploy:
 - reports, under `--check`, anything installed under the label prefix that is
   not in `RAPTOR_AGENTS`.
 
+## Capture configuration
+
+    bin/deploy-config           # deploy config/capture.properties as committed at HEAD
+    bin/deploy-config --check   # report drift; changes nothing
+
+The stack mounts a **deployed copy** of the capture configuration,
+`RAPTOR_CONFIG_DIR` (default `~/.raptor/config`), never the repository's
+`config/` (#19). The recorder re-reads it on every scope poll, so a change needs
+no restart. It used to mount the working tree, which meant a `git checkout`
+reconfigured live capture within one poll. The deploy:
+
+- writes the file as **committed** at `HEAD`, and refuses while the working-tree
+  copy has uncommitted changes;
+- replaces it atomically, so a poll never reads half a file;
+- records the commit, branch and time in `DEPLOYED_FROM` beside it.
+
+`bin/up` runs it before starting the stack, so the image and the configuration
+come from one commit. A config-only change is: merge, then `bin/deploy-config`.
+
 ## Running a shadow
 
 To prove the tooling on a machine that already has watchers, run only the

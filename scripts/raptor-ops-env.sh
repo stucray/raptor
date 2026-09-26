@@ -50,9 +50,12 @@ unset raptor_line raptor_key raptor_val
 : "${RAPTOR_DB_NAME:=paddock}"
 : "${RAPTOR_DB_USER:=paddock}"
 : "${RAPTOR_BACKUP_DIR:=$RAPTOR_STATE_DIR/backups}"
+# The deployed capture configuration the stack mounts (#19): bin/deploy-config
+# writes it, compose mounts it, and a branch checkout cannot touch it.
+: "${RAPTOR_CONFIG_DIR:=$RAPTOR_STATE_DIR/config}"
 # The sops file carrying `ntfy-enabled` and `ntfy-topic`. Empty means no alerts
 # are sent; every script then logs what it would have said.
 : "${RAPTOR_SECRETS:=}"
 export RAPTOR_STATE_DIR RAPTOR_LABEL_PREFIX RAPTOR_BACKEND_URL \
   RAPTOR_POSTGRES_CONTAINER RAPTOR_BACKEND_CONTAINER RAPTOR_FRONTEND_CONTAINER \
-  RAPTOR_DB_NAME RAPTOR_DB_USER RAPTOR_BACKUP_DIR RAPTOR_SECRETS
+  RAPTOR_DB_NAME RAPTOR_DB_USER RAPTOR_BACKUP_DIR RAPTOR_CONFIG_DIR RAPTOR_SECRETS
