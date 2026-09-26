@@ -3,10 +3,10 @@
     "tool": "pmd",
     "tool_version": "7.24.0",
     "ruleset": "pmd-ruleset.xml",
-    "total_findings": 76,
+    "total_findings": 77,
     "by_priority": {
       "2": 6,
-      "3": 70
+      "3": 71
     }
   },
   "findings": [
@@ -404,6 +404,18 @@
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderHealthIndicator.java",
       "begin_line": 47,
       "end_line": 47,
+      "message": "Ensure that resources like this Recording object are closed after use"
+    },
+    {
+      "rule": "CloseResource",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderSupervisor",
+      "method": "consecutiveFailedAttempts",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
+      "begin_line": 472,
+      "end_line": 472,
       "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
@@ -883,7 +895,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
       "begin_line": 40,
-      "end_line": 492,
+      "end_line": 505,
       "message": "This class has too many methods, consider refactoring it."
     },
     {

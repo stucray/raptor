@@ -458,8 +458,21 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 		stateSince = clock.instant();
 	}
 
+	/**
+	 * Zero from a session's first write, not from its end (#13).
+	 *
+	 * <p>The stored count is only settled when a session closes, which for a
+	 * healthy one can be hours away: read it bare and a recorder that had four
+	 * dead attempts before a good session reports failing for that whole session.
+	 * Whether the session in flight has written anything is the live answer to
+	 * "is it failing now", so it overrides the stored count while it lasts.
+	 */
 	@Override
 	public int consecutiveFailedAttempts() {
+		Recording current = recording;
+		if (current != null && current.written() > 0) {
+			return 0;
+		}
 		return consecutiveFailed.get();
 	}
 
