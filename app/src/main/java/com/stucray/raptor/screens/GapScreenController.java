@@ -1,5 +1,6 @@
 package com.stucray.raptor.screens;
 
+import com.stucray.raptor.projection.PlayWindow;
 import java.time.OffsetDateTime;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
@@ -33,19 +34,19 @@ class GapScreenController {
     @GetMapping
     List<GapView> gaps(@RequestParam(defaultValue = "100") int limit) {
         // The overlap test is the health summary's, written once per row:
-        // a market is in play from in_play_since until it left scope, or until
-        // now if it has not.
+        // a market is in play from kickoff (or its first in-play poll, if that
+        // was earlier) until it left scope, or until now if it has not (#16).
         return jdbc.sql("""
                 select g.id, g.session_id, g.started_at, g.ended_at, g.cause, g.detail,
                        (extract(epoch from (g.ended_at - g.started_at)) * 1000)::bigint as duration_ms,
                        (select count(*) from ledger.market_scope s
-                        where s.in_play_since is not null
+                        where %1$s
                           and g.started_at < case when s.state = 'DONE'
                                   then s.state_changed_at else now() end
-                          and g.ended_at > s.in_play_since) as markets_in_play
+                          and g.ended_at > %2$s) as markets_in_play
                 from ledger.capture_gap g
                 order by g.started_at desc, g.id desc
-                limit :limit""")
+                limit :limit""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS))
             .param("limit", limit)
             .query((rs, i) -> new GapView(
                 rs.getLong("id"),

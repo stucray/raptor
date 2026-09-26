@@ -147,8 +147,57 @@ class CaptureGapLedgerIntegrationTest {
 				assertThat(gap.seconds()).isEqualTo(300));
 	}
 
+	/**
+	 * Play starts at kickoff, not at the poll that noticed it (#16).
+	 *
+	 * <p>{@code in_play_since} is dated by the catalogue poll, up to fifteen
+	 * minutes after the whistle: on 2026-09-25 Girona v Albacete was in play on
+	 * the stream at 18:29:54Z and marked in play at 18:38:10Z. A lid closed at
+	 * 18:32 and opened at 18:37 ended before that mark, and read as a gap with
+	 * nothing in play — the one gap in a match nobody would be told about.
+	 */
+	@Test
+	void reportsAGapBetweenKickoffAndTheFirstInPlayPoll() {
+		scheduled("1.1", now.minusSeconds(3600), now.minusSeconds(600), now.minusSeconds(120));
+		gap(now.minusSeconds(500), now.minusSeconds(300), "SLEEP");
+
+		assertThat(gaps.lastGapDuringPlay()).hasValueSatisfying(gap -> {
+			assertThat(gap.seconds()).isEqualTo(200);
+			assertThat(gap.live()).isEqualTo(1);
+		});
+	}
+
+	/** ...but a gap that ended before kickoff is still pre-match, and says nothing. */
+	@Test
+	void silentWhenTheGapEndedBeforeKickoff() {
+		scheduled("1.1", now.minusSeconds(3600), now.minusSeconds(600), now.minusSeconds(120));
+		gap(now.minusSeconds(1000), now.minusSeconds(700), "SLEEP");
+
+		assertThat(gaps.lastGapDuringPlay()).isEmpty();
+	}
+
+	/**
+	 * ...and a kickoff alone does not make a match. A fixture postponed after its
+	 * market was created passes its kickoff without ever going in play; a gap then
+	 * cost nothing, and counting it would turn every postponement into an alarm.
+	 */
+	@Test
+	void aKickoffThatNeverWentInPlayIsNotPlay() {
+		scheduled("1.1", now.minusSeconds(3600), now.minusSeconds(600), null);
+		gap(now.minusSeconds(500), now.minusSeconds(300), "SLEEP");
+
+		assertThat(gaps.lastGapDuringPlay()).isEmpty();
+	}
+
 	private void market(String id, Instant firstSeen, Instant inPlaySince) {
 		insertMarket(id, firstSeen, inPlaySince, "SUBSCRIBED", firstSeen);
+	}
+
+	private void scheduled(String id, Instant firstSeen, Instant kickoff, Instant inPlaySince) {
+		insertMarket(id, firstSeen, inPlaySince, "SUBSCRIBED", firstSeen);
+		jdbc.sql("update ledger.market_scope set kickoff = ? where market_id = ?")
+				.params(at(kickoff), id)
+				.update();
 	}
 
 	private void done(String id, Instant firstSeen, Instant inPlaySince, Instant finished) {

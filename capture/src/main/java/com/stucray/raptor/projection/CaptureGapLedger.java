@@ -80,8 +80,8 @@ class CaptureGapLedger implements GapHistory {
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end) as markets,
 				(select count(*) from ledger.market_scope s
-					where s.in_play_since is not null
-						and g.ended_at > s.in_play_since
+					where %1$s
+						and g.ended_at > %2$s
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end) as live
 			from ledger.capture_gap g
@@ -89,12 +89,12 @@ class CaptureGapLedger implements GapHistory {
 				and g.ended_at - g.started_at >= cast(:floor as interval)
 				and exists (
 					select 1 from ledger.market_scope s
-					where s.in_play_since is not null
+					where %1$s
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end
-						and g.ended_at > s.in_play_since)
+						and g.ended_at > %2$s)
 			order by g.ended_at desc, g.id desc
-			limit 1""";
+			limit 1""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS);
 
 	private final JdbcClient jdbc;
 	private final Clock clock;
