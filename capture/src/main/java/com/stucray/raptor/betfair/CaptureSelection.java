@@ -21,9 +21,14 @@ import org.springframework.stereotype.Component;
  * there is exactly one place the answer comes from.
  *
  * <p>Re-read on every poll rather than bound once at startup, for the reason
- * the file exists: changing the league set should be one edit, and a change
- * that needed a restart to take effect would make the running recorder quietly
+ * the file exists: changing the league set should need no restart, and a change
+ * that needed one to take effect would make the running recorder quietly
  * disagree with the file for as long as nobody noticed.
+ *
+ * <p>The file read here is the <b>deployed</b> copy, not the repository's
+ * (#19): {@code bin/deploy-config} writes it from the committed version, because
+ * re-reading the working tree every poll let a branch checkout reconfigure live
+ * capture.
  *
  * <p>The backend has its own reader of this file for the health screen. That
  * duplication is deliberate and temporary — the two modules cannot share code

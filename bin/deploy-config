@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Put the committed capture configuration where the recorder reads it, and say
+# when the two have drifted (#19).
+#
+# WHY THE DEPLOYED COPY IS NOT THE REPO COPY. The recorder re-reads
+# capture.properties on every scope poll, which is what lets a league change
+# take effect without a restart. When compose mounted the repo's own `config/`,
+# that also meant a `git checkout` reconfigured live capture within one poll:
+# an older branch silently reverted a change, a branch without the file stopped
+# capture altogether, and a half-finished edit went live as it was typed. So the
+# stack mounts RAPTOR_CONFIG_DIR, outside every repo, and this script is the
+# only thing that writes to it. Same reasoning as bin/deploy-agents.
+#
+# WHAT IS DEPLOYED: the file as COMMITTED at HEAD, never the working-tree copy,
+# and the deploy refuses while the working-tree copy differs from it. An
+# uncommitted edit is exactly the thing this exists to keep out of capture, and
+# ignoring it silently would leave someone believing it had gone out.
+#
+# ATOMICALLY. The recorder may read the file at any moment, so the new copy is
+# written beside it and renamed over it: a reader sees the old file or the new
+# one, never half of either.
+#
+# WHERE IT CAME FROM is recorded beside it, in DEPLOYED_FROM (commit, branch,
+# time), so the running configuration can be traced to a commit.
+#
+# NO RESTART. A config-only change is: merge, then this. The recorder picks it
+# up at its next poll. bin/up runs it before starting the stack, so the image and
+# the configuration come from the same commit.
+#
+#   bin/deploy-config          deploy HEAD's committed capture.properties
+#   bin/deploy-config --check  report drift only; changes nothing
+#
+# Exit 1 from --check means the deployed copy is missing or differs from HEAD.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+# shellcheck source=../scripts/raptor-ops-env.sh
+source scripts/raptor-ops-env.sh
+
+SRC="config/capture.properties"
+DEST_DIR="$RAPTOR_CONFIG_DIR"
+DEST="$DEST_DIR/capture.properties"
+
+check_only=""
+case "${1:-}" in
+  --check) check_only=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--check]" >&2; exit 2 ;;
+esac
+
+sha=$(git rev-parse --short HEAD 2>/dev/null) || { echo "deploy-config: not a git checkout" >&2; exit 1; }
+branch=$(git rev-parse --abbrev-ref HEAD)
+committed=$(mktemp)
+trap 'rm -f "$committed"' EXIT
+if ! git show "HEAD:$SRC" > "$committed" 2>/dev/null; then
+  echo "deploy-config: $SRC is not committed at HEAD ($sha on $branch)" >&2
+  exit 1
+fi
+
+if [[ -n "$check_only" ]]; then
+  from=$(head -1 "$DEST_DIR/DEPLOYED_FROM" 2>/dev/null)
+  if [[ ! -e "$DEST" ]]; then
+    echo "capture config: MISSING $DEST (never deployed) — run bin/deploy-config"
+    exit 1
+  elif ! cmp -s "$committed" "$DEST"; then
+    echo "capture config: DRIFT — $DEST differs from $SRC at $sha ($branch); deployed ${from:-from an unknown commit}"
+    exit 1
+  fi
+  echo "capture config: deployed copy matches $sha ($branch)"
+  exit 0
+fi
+
+if ! cmp -s "$committed" "$SRC"; then
+  echo "refusing: $SRC has uncommitted changes. Only a committed configuration is" >&2
+  echo "deployed; commit it (or restore it) and run this again." >&2
+  exit 1
+fi
+
+mkdir -p "$DEST_DIR"
+tmp="$DEST_DIR/.capture.properties.$$"
+cp "$committed" "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$DEST" || {
+  rm -f "$tmp"
+  echo "deploy-config: FAILED to write $DEST" >&2
+  exit 1
+}
+printf '%s %s %s\n' "$sha" "$branch" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEST_DIR/DEPLOYED_FROM"
+echo "capture config: deployed $SRC at $sha ($branch) to $DEST"

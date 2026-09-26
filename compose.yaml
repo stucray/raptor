@@ -143,10 +143,15 @@ services:
       # Read-WRITE, unlike everything else mounted here: this is the one place
       # the application is meant to write on the host.
       - ${RAPTOR_SPILL_DIR:-${HOME}/.raptor/spill}:/spill
-      # The capture config the launcher reads, mounted rather than baked in:
-      # the file in git is the one definition, and a copy inside the image
-      # could disagree with the one the recorder actually ran on.
-      - ./config:/config:ro
+      # The capture config the recorder reads, mounted rather than baked in: a
+      # copy inside the image could disagree with the one it actually ran on.
+      # The DEPLOYED copy, not the repo's ./config (#19): the recorder re-reads
+      # it every poll, so mounting the working tree let a branch checkout
+      # reconfigure live capture. bin/deploy-config writes it from the commit
+      # at HEAD, and bin/up runs that first. The default matches
+      # RAPTOR_CONFIG_DIR's; a bare `docker compose up` on a machine that never
+      # deployed it mounts an empty directory, and the recorder requests nothing.
+      - ${RAPTOR_CONFIG_DIR:-${HOME}/.raptor/config}:/config:ro
       # The custody root, READ-ONLY and enforced by Docker rather than by
       # review. Raw files are written only by each source's capture process;
       # the ingest jobs read them and nothing in this application may ever

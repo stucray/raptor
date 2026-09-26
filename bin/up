@@ -19,6 +19,11 @@ source scripts/raptor-ops-env.sh
 
 bin/deploy-agents --check || true
 
+# The capture config the stack mounts is a deployed copy (#19), so it is
+# deployed here, from the same commit as the image. Fatal: a stack started
+# without it requests nothing from Betfair.
+bin/deploy-config
+
 if [[ -n "$RAPTOR_SECRETS" && -r "$RAPTOR_SECRETS" ]] && command -v sops >/dev/null; then
   exec sops exec-env "$RAPTOR_SECRETS" '
     BETFAIR_APP_KEY="$(printenv betfair-app-key-live)" \
