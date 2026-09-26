@@ -128,7 +128,7 @@ const CONFIGURED: ConfiguredCapture = {
     'Spanish Segunda Division',
   ],
   marketTypes: ['MATCH_ODDS', 'OVER_UNDER_15', 'OVER_UNDER_25', 'OVER_UNDER_35'],
-  controlCountries: ['GB'],
+  controlCountries: [],
 };
 
 const HEALTHY_SUMMARY: CaptureSummary = {
@@ -422,6 +422,23 @@ describe('HealthScreen', () => {
     expect(fixture.nativeElement.textContent).toContain(
       'No sessions in the ledger',
     );
+  });
+
+  it('shows no control set when none is configured, and one when it is', async () => {
+    // Retired (#11): the shipped config has none, and the line must not end
+    // in a dangling "control" with nothing after it.
+    const fixture = create(SOURCES, RUNS);
+    await fixture.whenStable();
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('4 market types');
+    expect(text).not.toContain('control');
+
+    const withControl = create(SOURCES, RUNS, [RECORDED], {
+      ...HEALTHY_SUMMARY,
+      configured: { ...CONFIGURED, controlCountries: ['GB'] },
+    });
+    await withControl.whenStable();
+    expect(withControl.nativeElement.textContent).toContain('· control GB');
   });
 
   it('says so when the capture config cannot be read', async () => {

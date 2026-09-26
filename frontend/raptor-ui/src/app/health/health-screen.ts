@@ -128,8 +128,12 @@ import { CaptureSession, HealthApi } from './health-api';
           <dt>Records</dt>
           <dd>
             {{ cfg.leagues.length }} leagues ·
-            {{ cfg.marketTypes.length }} market types ·
-            control {{ cfg.controlCountries.join(', ') }}
+            {{ cfg.marketTypes.length }} market types
+            <!-- The control set is retired (#11), so an empty list is the
+                 normal case and says nothing; one that reappears is shown. -->
+            @if (cfg.controlCountries.length > 0) {
+              · control {{ cfg.controlCountries.join(', ') }}
+            }
             <span class="muted">({{ cfg.leagues.join(', ') }})</span>
           </dd>
 

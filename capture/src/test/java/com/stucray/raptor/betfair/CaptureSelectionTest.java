@@ -27,7 +27,9 @@ class CaptureSelectionTest {
 				.hasSize(8);
 		assertThat(selection.marketTypes())
 				.containsExactly("MATCH_ODDS", "OVER_UNDER_15", "OVER_UNDER_25", "OVER_UNDER_35");
-		assertThat(selection.controlCountries()).containsExactly("GB");
+		assertThat(selection.controlCountries())
+				.as("the control set is retired (#11): every market in scope is one the leagues asked for")
+				.isEmpty();
 		assertThat(selection.isEmpty()).isFalse();
 	}
 
