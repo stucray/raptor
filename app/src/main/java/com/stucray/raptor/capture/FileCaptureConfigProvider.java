@@ -47,7 +47,7 @@ class FileCaptureConfigProvider implements CaptureConfigProvider {
             return Optional.of(new CaptureConfig(
                 list(p, "capture.leagues"),
                 list(p, "capture.market-types"),
-                list(p, "capture.control-countries")));
+                optionalList(p, "capture.control-countries")));
         } catch (IllegalArgumentException e) {
             // A malformed config is a deployment fault, not a data
             // condition: say which file and why, then degrade like a
@@ -59,6 +59,22 @@ class FileCaptureConfigProvider implements CaptureConfigProvider {
 
     private static List<String> list(Properties p, String key) {
         return Arrays.stream(required(p, key).split(","))
+            .map(String::trim).filter(s -> !s.isEmpty()).toList();
+    }
+
+    /**
+     * The control set is retired (#11), so its key is absent from the shipped
+     * file, and absent or blank means none. The recorder's own reader has always
+     * read it that way; this one required it, and so reported a file with no
+     * control set as unreadable. Leagues and market types stay required: a file
+     * without them really is not a capture configuration.
+     */
+    private static List<String> optionalList(Properties p, String key) {
+        String v = p.getProperty(key);
+        if (v == null || v.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(v.split(","))
             .map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 

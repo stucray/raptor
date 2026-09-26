@@ -36,7 +36,9 @@ class FileCaptureConfigProviderTest {
             .contains("English Premier League", "Spanish Segunda Division");
         // MATCH_ODDS plus the three O/U lines the historic corpus carries.
         assertThat(c.marketTypes()).hasSize(4).contains("MATCH_ODDS");
-        assertThat(c.controlCountries()).containsExactly("GB");
+        assertThat(c.controlCountries())
+            .as("the control set is retired (#11)")
+            .isEmpty();
     }
 
     @Test
@@ -56,6 +58,20 @@ class FileCaptureConfigProviderTest {
 
         assertThat(new FileCaptureConfigProvider(
             new CaptureProperties(f.toString())).current()).isEmpty();
+    }
+
+    @Test
+    void aConfigWithNoControlSetIsReadableAndHasNone(@TempDir Path dir) throws Exception {
+        // The control set is retired (#11) and its key gone from the shipped
+        // file. This reader once required it, so the health screen reported the
+        // live configuration as unreadable the moment the key was removed.
+        Path f = dir.resolve("capture.properties");
+        Files.writeString(f, "capture.leagues=Italian Serie B\ncapture.market-types=MATCH_ODDS\n");
+
+        CaptureConfig c = new FileCaptureConfigProvider(
+            new CaptureProperties(f.toString())).current().orElseThrow();
+        assertThat(c.leagues()).containsExactly("Italian Serie B");
+        assertThat(c.controlCountries()).isEmpty();
     }
 
     @Test

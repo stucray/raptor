@@ -413,7 +413,10 @@ class CaptureSummaryTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.configured.leagues.length()").value(8))
             .andExpect(jsonPath("$.configured.marketTypes.length()").value(4))
-            .andExpect(jsonPath("$.configured.controlCountries[0]").value("GB"))
+            // Retired (#11): an empty list, not an absent field, so the screen
+            // can tell "no control set" from "config unreadable".
+            .andExpect(jsonPath("$.configured.controlCountries").isArray())
+            .andExpect(jsonPath("$.configured.controlCountries").isEmpty())
             // No schedule: nothing fires at any hour after S8, so the panel
             // shows what capture records and not when.
             .andExpect(jsonPath("$.configured.runHours").doesNotExist())

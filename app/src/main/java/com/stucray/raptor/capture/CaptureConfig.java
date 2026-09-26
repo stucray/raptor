@@ -25,7 +25,8 @@ import java.util.List;
  *     the rest at a rollover
  * @param marketTypes the market types captured per event
  * @param controlCountries the control set, filling capacity the target leagues
- *     leave under Betfair's subscription cap
+ *     leave under Betfair's subscription cap. Empty since it was retired (#11);
+ *     an absent key reads as empty
  */
 public record CaptureConfig(
     List<String> leagues,
