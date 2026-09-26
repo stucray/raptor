@@ -2,6 +2,7 @@ package com.stucray.raptor.health;
 
 import com.stucray.raptor.capture.CaptureConfig;
 import com.stucray.raptor.capture.CaptureConfigProvider;
+import com.stucray.raptor.projection.PlayWindow;
 import com.stucray.raptor.sources.SourceAdapter;
 import com.stucray.raptor.sources.SourceAdapter.Freshness;
 import com.stucray.raptor.sources.SourceRegistry;
@@ -279,10 +280,10 @@ class CollectorHealthController {
                 select count(*) from ledger.capture_gap g
                 where exists (
                     select 1 from ledger.market_scope s
-                    where s.in_play_since is not null
+                    where %1$s
                       and g.started_at < case when s.state = 'DONE'
                               then s.state_changed_at else now() end
-                      and g.ended_at > s.in_play_since)""")
+                      and g.ended_at > %2$s)""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS))
             .query(Integer.class).single();
         return gaps == null ? 0 : gaps;
     }
@@ -313,10 +314,10 @@ class CollectorHealthController {
                   and d.to_at > d.from_at
                   and exists (
                     select 1 from ledger.market_scope s
-                    where s.in_play_since is not null
+                    where %1$s
                       and d.from_at < case when s.state = 'DONE'
                               then s.state_changed_at else now() end
-                      and d.to_at > s.in_play_since)""")
+                      and d.to_at > %2$s)""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS))
             .query(Integer.class).single();
         return restarts == null ? 0 : restarts;
     }

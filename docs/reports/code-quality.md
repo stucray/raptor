@@ -58,7 +58,7 @@ Sorted by PMD priority (lower = more severe), then by line-span.
 | `ImplicitFunctionalInterface` | [`ScopeCensus.java#L14`](../../src/main/java/com/stucray/raptor/scope/ScopeCensus.java#L14) | — | Annotate this interface with @FunctionalInterface or with @SuppressWarnings("PMD.ImplicitFunctionalInterface") to clarify your intent. |
 | `ImplicitFunctionalInterface` | [`ScopeDiscovery.java#L13`](../../src/main/java/com/stucray/raptor/scope/ScopeDiscovery.java#L13) | — | Annotate this interface with @FunctionalInterface or with @SuppressWarnings("PMD.ImplicitFunctionalInterface") to clarify your intent. |
 | `TooManyMethods` | [`RecorderSupervisor.java#L40`](../../src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java#L40) | — | This class has too many methods, consider refactoring it. |
-| `TooManyMethods` | [`CollectorHealthController.java#L36`](../../src/main/java/com/stucray/raptor/health/CollectorHealthController.java#L36) | — | This class has too many methods, consider refactoring it. |
+| `TooManyMethods` | [`CollectorHealthController.java#L37`](../../src/main/java/com/stucray/raptor/health/CollectorHealthController.java#L37) | — | This class has too many methods, consider refactoring it. |
 | `TooManyMethods` | [`BetfairCatalogue.java#L52`](../../src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java#L52) | — | This class has too many methods, consider refactoring it. |
 | `TooManyMethods` | [`TlsStreamSource.java#L50`](../../src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java#L50) | — | This class has too many methods, consider refactoring it. |
 

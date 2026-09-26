@@ -231,6 +231,41 @@ class CaptureSummaryTest {
     }
 
     /**
+     * Play starts at kickoff, not at the poll that noticed it (#16) — for the
+     * gap count and the restart count alike, which share the rule.
+     *
+     * <p>Here the catalogue poll marks the match in play ten minutes after the
+     * whistle, as it does routinely (on 2026-09-25, eight minutes). Both
+     * interruptions fall between the two: before #16 each ended before
+     * {@code in_play_since} and counted as nothing.
+     */
+    @Test
+    void interruptionsBeforeTheFirstInPlayPollStillCountAsDuringPlay() throws Exception {
+        scoped("1.match", true, "DONE", 40_000, 20);
+        jdbc.sql("""
+                update ledger.market_scope
+                set in_play_since = kickoff + interval '10 minutes'
+                where market_id = '1.match'""").update();
+        // A gap from kickoff+2m to kickoff+7m.
+        jdbc.sql("""
+                insert into ledger.capture_gap
+                  (id, session_id, started_at, ended_at, cause, ledger_run_id)
+                values (1, 1, now() - interval '20 hours' + interval '2 minutes',
+                        now() - interval '20 hours' + interval '7 minutes',
+                        'SLEEP', :projection)""")
+            .param("projection", ledgerRunId)
+            .update();
+        // And a restart: stopped at kickoff+3m, back at kickoff+5m.
+        sessionSpanning(1, 21 * 60, 20 * 60 - 3);
+        sessionSpanning(2, 20 * 60 - 5, 12 * 60);
+
+        mvc.perform(get("/api/health/capture-summary"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.gapsDuringPlay").value(1))
+            .andExpect(jsonPath("$.restartsDuringPlay").value(1));
+    }
+
+    /**
      * The interruption that leaves no evidence in the gap ledger, and is an
      * interruption anyway.
      *
