@@ -43,8 +43,9 @@ class RejectedMessages implements Quarantine {
 
 	private static final String INSERT = """
 			insert into raw.rejected_message
-				(sqlstate, failure, session_id, file_id, market_id, pt, received_at, seq, payload)
-			values (?, ?, ?, ?, ?, ?, ?, ?, ?)""";
+				(sqlstate, failure, session_id, file_id, market_id, pt, received_at, seq, payload,
+				segment_type, change_type)
+			values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
 
 	/**
 	 * Held since this process started. The table is the durable record; this is
@@ -79,7 +80,9 @@ class RejectedMessages implements Quarantine {
 						offset(message.pt()),
 						offset(message.receivedAt()),
 						message.seq(),
-						message.payload())).update();
+						message.payload(),
+						message.segmentType(),
+						message.changeType())).update();
 			}
 		}
 		catch (RuntimeException e) {

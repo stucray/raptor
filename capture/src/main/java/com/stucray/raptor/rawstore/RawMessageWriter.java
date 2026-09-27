@@ -24,7 +24,8 @@ import org.springframework.stereotype.Component;
 class RawMessageWriter implements RawWriter {
 
 	private static final String COPY_SQL = """
-			copy raw.stream_message (session_id, file_id, market_id, pt, received_at, seq, payload)
+			copy raw.stream_message (session_id, file_id, market_id, pt, received_at, seq, payload,
+				segment_type, change_type)
 			from stdin with (format text)""";
 
 	private final DataSource dataSource;
@@ -47,6 +48,8 @@ class RawMessageWriter implements RawWriter {
 					.add(message.receivedAt())
 					.add(message.seq())
 					.add(message.payload())
+					.add(message.segmentType())
+					.add(message.changeType())
 					.endRow();
 		}
 		return buffer.copyInto(dataSource, COPY_SQL);

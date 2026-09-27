@@ -4,6 +4,7 @@ import com.stucray.raptor.rawstore.RawMessage;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -11,9 +12,12 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * Splits one stream frame into {@code raw.stream_message} rows.
  *
- * <p><b>Framing and addressing only.</b> Four fields are read — {@code pt},
- * {@code recv_ms}, and each market-change block's {@code id} — and the block is
- * carried through untouched. This class does not know what a runner is, what a
+ * <p><b>Framing and addressing only.</b> Five fields are read — {@code pt},
+ * {@code recv_ms}, the envelope's {@code segmentType} and {@code ct}, and each
+ * market-change block's {@code id} — and the block is carried through untouched.
+ * The two envelope fields are stored verbatim beside every block the message
+ * carried: they say whether it was part of a change split across messages, or a
+ * subscription's image, which the block alone cannot (#22). This class does not know what a runner is, what a
  * suspension is or what a price ladder is, and it must never learn: everything
  * downstream of the system of record is rebuildable, and nothing that writes to
  * the system of record may depend on a parse being right. The capture path's
@@ -91,6 +95,8 @@ final class StreamFramer {
 		if (mc == null || mc.isNull()) {
 			return List.of();
 		}
+		String segmentType = text(message.get("segmentType"));
+		String changeType = text(message.get("ct"));
 
 		List<RawMessage> rows = new ArrayList<>();
 		long seq = firstSeq;
@@ -110,9 +116,16 @@ final class StreamFramer {
 					// Re-serialised rather than substring-sliced. The column is jsonb,
 					// which normalises key order, whitespace and duplicate keys anyway,
 					// so a byte-exact slice would buy nothing that survives the write.
-					MAPPER.writeValueAsString(marketChange)));
+					MAPPER.writeValueAsString(marketChange),
+					segmentType,
+					changeType));
 		}
 		return rows;
+	}
+
+	/** Verbatim, and absent as null: the stream omits both on an ordinary delta. */
+	private static @Nullable String text(@Nullable JsonNode value) {
+		return value == null || value.isNull() ? null : value.asString();
 	}
 
 	/** Frames that were not valid JSON. */

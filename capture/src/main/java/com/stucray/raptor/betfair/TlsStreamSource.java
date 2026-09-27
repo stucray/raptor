@@ -317,6 +317,12 @@ final class TlsStreamSource implements StreamSource {
 				"fields", properties.fields(),
 				"conflateMs", properties.conflate().toMillis()));
 		subscription.put("heartbeatMs", properties.heartbeat().toMillis());
+		// Stated rather than inherited: the schema documents no default, and
+		// whether one change can arrive as several messages decides how a reader
+		// must treat messages sharing a pt. On, because that is what the stream
+		// was already doing (a full image split across two messages), and each
+		// stored message now records its segmentType, so a reader can tell (#22).
+		subscription.put("segmentationEnabled", true);
 		if (from.resumable()) {
 			subscription.put("initialClk", from.initialClk());
 			subscription.put("clk", from.clk());

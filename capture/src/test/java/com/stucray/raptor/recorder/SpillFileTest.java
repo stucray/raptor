@@ -65,6 +65,40 @@ class SpillFileTest {
 	}
 
 	/**
+	 * The envelope fields survive a spill, and a file written by a build before
+	 * they existed — which has neither key — reads them as null rather than
+	 * failing: such a file may be sitting in the spill directory across the
+	 * deploy that adds them (#22).
+	 */
+	@Test
+	void carriesTheEnvelopeFieldsAndReadsAnOlderFileWithout(@TempDir Path directory)
+			throws IOException {
+		RawMessage segmented = new RawMessage(3L, null, "1.234",
+				Instant.ofEpochMilli(1787490204789L), null, 7L, "{\"id\":\"1.234\"}",
+				"SEG_END", "SUB_IMAGE");
+		RawMessage plain = new RawMessage(3L, null, "1.234",
+				Instant.ofEpochMilli(1787490204790L), null, 8L, "{\"id\":\"1.234\"}");
+		Path file = directory.resolve("spill.ndjson");
+		Files.writeString(file, SpillFile.render(List.of(segmented, plain), SpillCause.QUEUE_FULL,
+				SPILLED_AT));
+
+		List<RawMessage> read = SpillFile.read(file).messages();
+		assertThat(read.get(0).segmentType()).isEqualTo("SEG_END");
+		assertThat(read.get(0).changeType()).isEqualTo("SUB_IMAGE");
+		assertThat(read.get(1).segmentType()).isNull();
+		assertThat(read.get(1).changeType()).isNull();
+
+		Path older = directory.resolve("older.ndjson");
+		Files.writeString(older, """
+				{"_spill":{"session_id":3,"cause":"QUEUE_FULL","spilled_at":1,"messages":1}}
+				{"s":3,"m":"1.234","p":1787490204789,"r":null,"q":7,"d":{"id":"1.234"}}
+				""");
+		RawMessage fromOlder = SpillFile.read(older).messages().getFirst();
+		assertThat(fromOlder.segmentType()).isNull();
+		assertThat(fromOlder.changeType()).isNull();
+	}
+
+	/**
 	 * A file whose row count disagrees with its header is refused outright.
 	 *
 	 * <p>It should be impossible — a file is renamed into place only once written
