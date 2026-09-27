@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -58,8 +59,17 @@ final class SpillFile {
 					.append(",\"r\":")
 					.append(message.receivedAt() == null ? "null" : message.receivedAt().toEpochMilli())
 					.append(",\"q\":").append(message.seq())
-					.append(",\"d\":").append(message.payload())
-					.append("}\n");
+					.append(",\"d\":").append(message.payload());
+			// Only when present: the two are null on nearly every message, and a
+			// file from an earlier build has neither key, so absence must read as
+			// null either way (#22).
+			if (message.segmentType() != null) {
+				out.append(",\"g\":").append(quote(message.segmentType()));
+			}
+			if (message.changeType() != null) {
+				out.append(",\"c\":").append(quote(message.changeType()));
+			}
+			out.append("}\n");
 		}
 		return out.toString();
 	}
@@ -104,7 +114,9 @@ final class SpillFile {
 					received == null || received.isNull()
 							? null : Instant.ofEpochMilli(received.asLong()),
 					row.get("q").asLong(),
-					MAPPER.writeValueAsString(row.get("d"))));
+					MAPPER.writeValueAsString(row.get("d")),
+					text(row.get("g")),
+					text(row.get("c"))));
 		}
 		if (messages.size() != header.messages()) {
 			// The header is written before the rows and counts them, so a mismatch
@@ -116,6 +128,10 @@ final class SpillFile {
 					+ " message(s), header says " + header.messages());
 		}
 		return new Contents(header, messages);
+	}
+
+	private static @Nullable String text(@Nullable JsonNode value) {
+		return value == null || value.isNull() ? null : value.asString();
 	}
 
 	private static String quote(String value) {

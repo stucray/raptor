@@ -63,7 +63,8 @@ class TlsStreamSourceTest {
 		Map<String, Object> subscription = connection.sent(1);
 		assertThat(subscription).containsEntry("op", "marketSubscription")
 				.containsEntry("marketFilter", Map.of("marketIds", List.of("1.240", "1.241")))
-				.containsEntry("heartbeatMs", 5000);
+				.containsEntry("heartbeatMs", 5000)
+				.containsEntry("segmentationEnabled", true);
 		assertThat(subscription.get("marketDataFilter")).isEqualTo(Map.of(
 				"fields", List.of("EX_MARKET_DEF", "EX_ALL_OFFERS", "EX_TRADED", "EX_TRADED_VOL",
 						"EX_LTP"),

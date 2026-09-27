@@ -90,6 +90,37 @@ class StreamFramerTest {
 				.isEqualTo(Instant.ofEpochMilli(1787490204789L)));
 	}
 
+	/**
+	 * The envelope's {@code segmentType} and {@code ct} are stored verbatim beside
+	 * every block the message carried, and are absent on an ordinary delta (#22).
+	 * The shape is Betfair's published schema ({@code MarketChangeMessage}), with
+	 * synthetic ids.
+	 */
+	@Test
+	void keepsTheEnvelopesSegmentAndChangeTypeOnEveryBlock() {
+		String firstSegment = """
+				{"op":"mcm","pt":1787490204789,"ct":"SUB_IMAGE","segmentType":"SEG_START",\
+				"initialClk":"AAAAAA==","mc":[\
+				{"id":"1.111","img":true,"rc":[{"ltp":2.5,"id":47999}]},\
+				{"id":"1.222","img":true,"rc":[{"ltp":1.5,"id":1141}]}]}""";
+		String lastSegment = """
+				{"op":"mcm","pt":1787490204789,"ct":"SUB_IMAGE","segmentType":"SEG_END",\
+				"clk":"AAAAAA==","mc":[{"id":"1.222","rc":[{"ltp":3.5,"id":1142}]}]}""";
+		String delta = """
+				{"op":"mcm","pt":1787490205000,"clk":"AAAAAA==",\
+				"mc":[{"id":"1.111","rc":[{"ltp":2.52,"id":47999}]}]}""";
+
+		List<RawMessage> first = framer.frame(new StreamFrame(firstSegment, READ_CLOCK), 3L, 0L);
+		List<RawMessage> last = framer.frame(new StreamFrame(lastSegment, READ_CLOCK), 3L, 2L);
+		List<RawMessage> plain = framer.frame(new StreamFrame(delta, READ_CLOCK), 3L, 3L);
+
+		assertThat(first).extracting(RawMessage::segmentType).containsExactly("SEG_START", "SEG_START");
+		assertThat(first).extracting(RawMessage::changeType).containsExactly("SUB_IMAGE", "SUB_IMAGE");
+		assertThat(last).extracting(RawMessage::segmentType).containsExactly("SEG_END");
+		assertThat(plain).extracting(RawMessage::segmentType).containsOnlyNulls();
+		assertThat(plain).extracting(RawMessage::changeType).containsOnlyNulls();
+	}
+
 	/** A capture's `_meta` header names the fixture. It is not a message. */
 	@Test
 	void ignoresTheCaptureHeader() throws IOException {

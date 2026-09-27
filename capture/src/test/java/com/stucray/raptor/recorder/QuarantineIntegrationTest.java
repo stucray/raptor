@@ -68,9 +68,12 @@ class QuarantineIntegrationTest {
 
 		List<RawMessage> batch = new ArrayList<>();
 		for (int seq = 0; seq < 8; seq++) {
+			// Two carry envelope fields (#22): one that is captured, and the refused
+			// one, so both the COPY and the quarantine are shown to keep them.
 			batch.add(new RawMessage(seq == 5 ? ABSENT_SESSION : sessionId, null, "1.234",
 					Instant.parse("2026-09-14T12:00:00Z").plusMillis(seq), null, seq,
-					"{\"id\":\"1.234\"}"));
+					"{\"id\":\"1.234\"}", seq == 0 ? "SEG_START" : seq == 5 ? "SEG_END" : null,
+					seq == 0 || seq == 5 ? "SUB_IMAGE" : null));
 		}
 
 		// The witness: without it the assertions below would pass just as well
@@ -105,6 +108,21 @@ class QuarantineIntegrationTest {
 				.query((rs, n) -> rs.getLong("seq") + ":" + rs.getString("payload")).single())
 				.as("held WHOLE, so the cause can be fixed and the row replayed")
 				.isEqualTo("5:{\"id\":\"1.234\"}");
+
+		assertThat(jdbc.sql("""
+						select seq || ':' || coalesce(segment_type, '-') || ':'
+							|| coalesce(change_type, '-')
+						from raw.stream_message where session_id = ? and seq in (0, 1)
+						order by seq""")
+				.param(sessionId).query(String.class).list())
+				.as("the envelope fields reach the system of record, and absence stays NULL")
+				.containsExactly("0:SEG_START:SUB_IMAGE", "1:-:-");
+		assertThat(jdbc.sql("""
+						select segment_type || ':' || change_type from raw.rejected_message
+						where session_id = ?""")
+				.param(ABSENT_SESSION).query(String.class).single())
+				.as("and a quarantined row keeps them too")
+				.isEqualTo("SEG_END:SUB_IMAGE");
 	}
 
 	/** Does the server really refuse this batch? Asked, not assumed. */
