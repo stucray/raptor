@@ -55,6 +55,11 @@ setup() {
   dump="$work/backups/raptor-raw-$(date -u +%Y%m%dT%H%M%S)Z.dump"
   printf 'not really a dump\n' > "$dump"
   : > "$work/sent.log"
+  # Every real restore has keyed ordinary tables (#24), and the drill now goes
+  # red when it cannot read them, so a case that is not about them still needs
+  # one. Absent from the tallies, it is never compared.
+  printf 'spill_file\tid\t1\n' > "$work/restored.keys"
+  printf 'spill_file\t1\n' > "$work/live.asof"
 
   cat > "$work/bin/curl" <<'STUB'
 #!/bin/bash
@@ -91,6 +96,12 @@ case "$prog" in
   psql)
     sql=$(cat)
     if [[ "$sql" == *relpartbound* ]]; then cat "$WORK/late.list"
+    # #24: the restored server's highest key per ordinary table, and live's count
+    # up to it. The live query is kept so a case can assert the cutoff it was
+    # given came from the restore, not from somewhere the stub made up.
+    elif [[ "$sql" == *"restore keys"* ]]; then cat "$WORK/restored.keys" 2>/dev/null
+    elif [[ "$sql" == *"as of the dump"* ]]; then
+      printf '%s\n' "$sql" > "$WORK/asof.sql"; cat "$WORK/live.asof" 2>/dev/null
     elif [[ "$container" == "drill" ]]; then cat "$WORK/restored.tally"
     else cat "$WORK/live.tally"
     fi
@@ -264,6 +275,86 @@ printf '%s\t100\n' "$m1" > "$work/live.tally"
 out=$(run)
 expect_status "$out" FAILED
 expect_says "$out" "pg_restore of" "failed restore"
+teardown
+
+# --- 12: #24 — rows written to an ordinary table after the dump are drift ---
+# The regression, shaped like 2026-09-27: the backup ran long, the drill fired
+# while it was still a .part, and drilled the day-old dump instead. A day of
+# capture had added sessions and scope rows since. Before the fix every
+# ordinary raw table was compared exactly, so this reported FAILED about a
+# backup that was fine. Counted up to the dump's own highest key, live agrees.
+setup
+printf '%s\t100\n%s\t200\n%s\t30\ncapture_session\t134\nmarket_scope\t2830\n' \
+  "$m2" "$m1" "$cur" > "$work/restored.tally"
+printf '%s\t100\n%s\t200\n%s\t45\ncapture_session\t137\nmarket_scope\t2846\n' \
+  "$m2" "$m1" "$cur" > "$work/live.tally"
+printf 'capture_session\tid\t134\nmarket_scope\tfirst_seen_at\t2026-01-02 03:04:05.678+00\n' \
+  > "$work/restored.keys"
+printf 'capture_session\t134\nmarket_scope\t2830\n' > "$work/live.asof"
+: > "$work/late.list"
+# A newer backup, still being written: the .part the real backup renames later.
+touch -t 209912310000 "$work/backups/raptor-raw-20991231T000000Z.dump.part"
+out=$(run)
+expect_status "$out" OK
+expect_says "$out" "2 ordinary table(s) match live up to the dump's last row" "post-dump rows"
+expect_says "$out" "a newer backup was still being written" "stale dump named"
+# The cutoff live was asked about must be the one the RESTORE reported — a
+# canned answer from the stub proves nothing about the predicate otherwise.
+expect_says "$(cat "$work/asof.sql" 2>/dev/null)" "id <= '134'" "cutoff from restore"
+expect_says "$(cat "$work/asof.sql" 2>/dev/null)" "first_seen_at <= '2026-01-02 03:04:05.678+00'" "cutoff from restore"
+teardown
+
+# --- 13: a row live has BEHIND the dump's last key is a real fault ----------
+# The tolerance must not swallow the thing it exists beside: a row older than
+# the newest one the dump holds, that the dump does not hold, is a lost row.
+setup
+printf '%s\t100\n%s\t200\n%s\t30\ncapture_session\t134\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
+printf '%s\t100\n%s\t200\n%s\t45\ncapture_session\t137\n' "$m2" "$m1" "$cur" > "$work/live.tally"
+printf 'capture_session\tid\t134\n' > "$work/restored.keys"
+printf 'capture_session\t135\n' > "$work/live.asof"
+: > "$work/late.list"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "capture_session(restored=134 live=135 up to the dump's last row)" "row behind the cutoff"
+teardown
+
+# --- 14: a table with no key known is compared loosely, and says so ---------
+# A future table with no `id` is not a reason to go red, and not a reason to go
+# quiet either: restored must not exceed live, and the verdict names it.
+setup
+printf '%s\t100\n%s\t200\n%s\t30\nsome_new_table\t5\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
+printf '%s\t100\n%s\t200\n%s\t45\nsome_new_table\t8\n' "$m2" "$m1" "$cur" > "$work/live.tally"
+: > "$work/late.list"
+out=$(run)
+expect_status "$out" OK
+expect_says "$out" "no key known, so only restored <= live: some_new_table" "unkeyed table"
+teardown
+
+# --- 15: ...but even loosely, a restore that holds MORE than live is a fault
+# raw is append-only, so live having fewer rows than a backup of it means rows
+# left the system of record.
+setup
+printf '%s\t100\n%s\t200\n%s\t30\nsome_new_table\t9\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
+printf '%s\t100\n%s\t200\n%s\t45\nsome_new_table\t8\n' "$m2" "$m1" "$cur" > "$work/live.tally"
+: > "$work/late.list"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "some_new_table(restored=9 live=8)" "unkeyed table shrank"
+teardown
+
+# --- 16: a failed live count does not demote every table to loose -----------
+# Without the guard, an empty answer from live would leave every ordinary table
+# with no cutoff, the loop would compare them all loosely, and the drill would
+# say OK having checked less than it claims.
+setup
+printf '%s\t100\n%s\t200\n%s\t30\ncapture_session\t134\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
+printf '%s\t100\n%s\t200\n%s\t45\ncapture_session\t137\n' "$m2" "$m1" "$cur" > "$work/live.tally"
+printf 'capture_session\tid\t134\n' > "$work/restored.keys"
+: > "$work/live.asof"
+: > "$work/late.list"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "could not count live's ordinary tables" "failed live count"
 teardown
 
 echo
