@@ -23,6 +23,16 @@
 #     a mismatch there is a real fault, and the bulk of the corpus lives here.
 #   - the current partition must be non-empty and no larger than live, which is
 #     the only honest statement when rows are arriving between the dump and now.
+#   - every ORDINARY raw table (sessions, gaps, scope, file ledgers) must match
+#     live counted only up to the highest key the RESTORE holds (#24). These
+#     grow too — a day of capture adds sessions, gaps and scope rows — and were
+#     once compared exactly, which held only while the drill ran minutes after
+#     the backup it drilled. On 2026-09-27 the backup ran long, the drill found
+#     only the previous day's dump, and went red about a backup that was fine.
+#     The key is the identity `id`, or `first_seen_at` for market_scope, which
+#     has none; both are read from the restored server, so no clock is trusted —
+#     the dump's filename is the host's, and the VM's can wake an hour behind.
+#     A table with no known key is held only to restored <= live, and named.
 # That is drift-free without needing to know the dump's exact snapshot instant.
 #
 # AND THE SAME DRIFT HAPPENS TO THE TABLE SET, WHICH IS WHY THE DUMP'S INSTANT
@@ -167,6 +177,15 @@ else
   dump_instant=$(date -u -r "$(stat -f%m "$dump")" +"%Y-%m-%d %H:%M:%S+00")
 fi
 
+# Which dump is being drilled, and why, when it is not the one a reader would
+# assume (#24). A .part newer than the chosen dump means tonight's backup had
+# not finished, so this drill is answering about yesterday's — worth saying,
+# because it was exactly that overlap that first exposed the ordinary tables.
+dump_note=""
+if [[ -n "$(find "$BACKUP_DIR" -name "$BACKUP_PREFIX-*.dump.part*" -newer "$dump" 2>/dev/null)" ]]; then
+  dump_note=" (a newer backup was still being written, so this is the previous one)"
+fi
+
 free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
 if [[ -z "$free_gb" ]] || (( free_gb < MIN_FREE_GB )); then
   finish FAILED "only ${free_gb:-unknown} GB free (need ${MIN_FREE_GB}) — refusing to restore rather than fill the disk capture writes to"
@@ -229,6 +248,63 @@ if [[ -z "$restored" ]]; then
   finish FAILED "restored database reported no tables in schema raw"
 fi
 
+# The ordinary tables' cutoffs (#24), read from the RESTORED server: for each
+# raw table that is not a partition, its key column and the highest value the
+# dump holds -> "relname<TAB>key<TAB>max as text". The key is `id` wherever
+# there is one; market_scope has none and is keyed by `first_seen_at`, which
+# the database stamps with its own now(). A table with neither gets no row and
+# is compared loosely below. An empty table gets an empty max.
+restore_keys() {
+  docker exec -i "$DRILL_CONTAINER" psql -U "$RAPTOR_DB_USER" -d "$RAPTOR_DB_NAME" -At -F$'\t' <<'SQL'
+-- restore keys
+select c.relname, a.attname,
+       (xpath('/row/m/text()',
+              query_to_xml(format('select max(%I)::text as m from raw.%I', a.attname, c.relname),
+                           false, true, '')))[1]::text
+from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+where n.nspname = 'raw' and c.relkind = 'r' and not c.relispartition
+  and a.attname = case when c.relname = 'market_scope' then 'first_seen_at' else 'id' end
+order by 1;
+SQL
+}
+
+# Live's count of each keyed table up to the restore's cutoff -> "relname<TAB>n".
+# The cutoff is interpolated, because it is a different table and column per
+# row; everything interpolated came out of the restored catalogue and is checked
+# against a strict shape first, so a value that looks like anything else is
+# dropped and that table falls through to the loose comparison — named, not
+# silent. The literal is left untyped so it takes the column's own type, and a
+# timestamptz rendered as text carries its offset, so live's session zone
+# cannot move it.
+live_as_of() { # $1 = restore_keys output
+  local sql="" tbl key max
+  while IFS=$'\t' read -r tbl key max; do
+    [[ "$tbl" =~ ^[a-z_][a-z0-9_]*$ && "$key" =~ ^[a-z_][a-z0-9_]*$ ]] || continue
+    if [[ -z "$max" ]]; then
+      sql="$sql${sql:+ union all }select '$tbl', 0::bigint"
+    elif [[ "$max" =~ ^[0-9][0-9\ :.+-]*$ ]]; then
+      sql="$sql${sql:+ union all }select '$tbl', count(*) from raw.$tbl where $key <= '$max'"
+    fi
+  done <<< "$1"
+  [[ -z "$sql" ]] && return 0
+  printf -- '-- as of the dump\n%s;\n' "$sql" \
+    | docker exec -i "$POSTGRES_CONTAINER" psql -U "$RAPTOR_DB_USER" -d "$RAPTOR_DB_NAME" -At -F$'\t'
+}
+
+# Either query failing must not quietly demote every ordinary table to the loose
+# comparison — that would be a drill that still says OK having checked less,
+# which is the failure shape #279 was.
+keys=$(restore_keys)
+if [[ -z "$keys" ]]; then
+  finish FAILED "the restore reported no key for any ordinary raw table, so none could be compared"
+fi
+as_of=$(live_as_of "$keys")
+if [[ -z "$as_of" ]]; then
+  finish FAILED "could not count live's ordinary tables up to the dump's last row"
+fi
+
 # Partitions of raw.stream_message that BEGIN at or after the dump instant, plus
 # the DEFAULT partition — the ones whose absence from the restore is drift rather
 # than fault. Read from the live catalogue rather than parsed out of the names:
@@ -288,7 +364,7 @@ if [[ -n "${missing//[[:space:]]/}" ]]; then
   fi
 fi
 
-mismatches=""; checked=0; rows=0; sealed=0
+mismatches=""; checked=0; rows=0; sealed=0; ordinary=0; loose=""
 while IFS=$'\t' read -r tbl n; do
   [[ -z "$tbl" ]] && continue
   live_n=$(printf '%s\n' "$live" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
@@ -305,13 +381,29 @@ while IFS=$'\t' read -r tbl n; do
     if (( n == 0 )) || (( n > live_n )); then
       mismatches="$mismatches $tbl(restored=$n live=$live_n, current partition)"
     fi
+  elif [[ ! "$tbl" =~ ^stream_message_ ]]; then
+    # An ordinary table (#24): exact, but only up to the dump's last row.
+    upto=$(printf '%s\n' "$as_of" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
+    if [[ -n "$upto" ]]; then
+      ordinary=$((ordinary + 1))
+      if (( n != upto )); then
+        mismatches="$mismatches $tbl(restored=$n live=$upto up to the dump's last row)"
+      fi
+    else
+      # No key known. raw is append-only, so a restore holding MORE than live
+      # still means rows left the system of record; fewer is only drift.
+      loose="$loose $tbl"
+      if (( n > live_n )); then
+        mismatches="$mismatches $tbl(restored=$n live=$live_n)"
+      fi
+    fi
   elif (( n != live_n )); then
     mismatches="$mismatches $tbl(restored=$n live=$live_n)"
   fi
 done <<< "$restored"
 
 if [[ -n "$mismatches" ]]; then
-  finish FAILED "restore of $(basename "$dump") does not match live:$mismatches"
+  finish FAILED "restore of $(basename "$dump")$dump_note does not match live:$mismatches"
 fi
 if (( rows == 0 )); then
   finish FAILED "restore produced $checked table(s) but zero rows in total"
@@ -323,4 +415,4 @@ if (( sealed == 0 )); then
   finish FAILED "restore produced $checked table(s) but no sealed partition of raw.stream_message, so nothing was actually verified"
 fi
 
-finish OK "restored $(basename "$dump") into a throwaway server: $checked raw table(s), $rows rows, $sealed sealed partition(s) match live${tolerated:+; absent from the dump and empty in live, so tolerated:$tolerated}"
+finish OK "restored $(basename "$dump")$dump_note into a throwaway server: $checked raw table(s), $rows rows, $sealed sealed partition(s) match live, $ordinary ordinary table(s) match live up to the dump's last row${loose:+; no key known, so only restored <= live:$loose}${tolerated:+; absent from the dump and empty in live, so tolerated:$tolerated}"
