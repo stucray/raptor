@@ -26,13 +26,16 @@ import org.springframework.stereotype.Component;
  * end of it being that the recorder cannot write the system of record at all.
  *
  * <p><b>The new bound comes from the old one, never from a fresh calculation of
- * "this month".</b> The existing partitions do not sit on midnight UTC — the
- * generating block used {@code date} boundaries cast in the session's timezone,
- * so every bound is 17:00Z, which is midnight at UTC+7 where the migration was
- * run. Computing the next month from a clock would therefore leave a seven-hour
- * hole, or an overlap that PostgreSQL refuses outright. Extending from the last
- * existing upper bound is exact whatever that offset happens to be, and it is
- * the same answer on a machine in any timezone. The month arithmetic is done
+ * "this month".</b> Not every partition sits on midnight UTC: V3's generating
+ * block used {@code date} boundaries cast in the session's timezone, so the
+ * months it made that hold rows run 17:00Z to 17:00Z — midnight at UTC+7, where
+ * it was run. V37 (#26) replaced the empty ones after them with a bridge to the
+ * next midnight-UTC month start, so from there each month on is midnight UTC.
+ * Computing the next month from a clock would leave a hole wherever a bound is
+ * not where the clock expects it, or an overlap that PostgreSQL refuses
+ * outright. Extending from the last existing upper bound is exact whatever
+ * offset it happens to be at, and it is the same answer on a machine in any
+ * timezone. The month arithmetic is done
  * explicitly {@code at time zone 'UTC'} for the reason the rest of this codebase
  * does: the same expression evaluated in the session's zone is a different
  * value on a laptop than in CI.
@@ -226,9 +229,10 @@ class PartitionMaintenance {
 	}
 
 	private void create(OffsetDateTime from, OffsetDateTime to) {
-		// The midpoint names it. A range of 2027-07-31T17:00Z to 2027-08-31T17:00Z
-		// is August and neither bound says so, because the existing partitions sit
-		// on 17:00Z rather than midnight.
+		// The midpoint names it. A range of 2026-07-31T17:00Z to 2026-08-31T17:00Z
+		// is August and neither bound says so; a V3 month that has not been
+		// replaced sits on 17:00Z rather than midnight, and so may a test database's
+		// before V37 has run.
 		String name = "stream_message_"
 				+ MONTH.format(from.plus(Duration.between(from, to).dividedBy(2)));
 		if (!PARTITION_NAME.matcher(name).matches()) {
