@@ -1,5 +1,7 @@
 package com.stucray.raptor;
 
+import java.time.ZoneOffset;
+import java.util.TimeZone;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -28,6 +30,13 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 public class RaptorApplication {
 
 	public static void main(String[] args) {
+		// Every persisted instant is UTC (#26), and this is set rather than inherited
+		// from the image or the host. pgjdbc sets each session's TimeZone from the
+		// JVM default, which is how V3 came to cast its partition bounds at UTC+7;
+		// and Spring Batch writes its zone-less `timestamp` columns in it. Tests
+		// deliberately do not pass through here: a laptop outside UTC is the only
+		// place an implicit zone shows up, since CI runs UTC.
+		TimeZone.setDefault(TimeZone.getTimeZone(ZoneOffset.UTC));
 		SpringApplication.run(RaptorApplication.class, args);
 	}
 

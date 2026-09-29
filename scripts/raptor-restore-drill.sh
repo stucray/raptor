@@ -308,8 +308,9 @@ fi
 # Partitions of raw.stream_message that BEGIN at or after the dump instant, plus
 # the DEFAULT partition — the ones whose absence from the restore is drift rather
 # than fault. Read from the live catalogue rather than parsed out of the names:
-# the bounds in this database sit at 17:00Z, not midnight (V3 rendered date
-# bounds in a UTC+7 session), so a name says the month and not the range.
+# the months V3 made that hold rows sit at 17:00Z, not midnight (V3 rendered
+# date bounds in a UTC+7 session; V37, #26, realigned only the empty ones after
+# them), so a name says the month and not the range.
 #
 # The DEFAULT partition renders as the bare word `DEFAULT`, and `''::timestamptz`
 # is an ERROR rather than a NULL — hence `case`, which provably guards the cast,
