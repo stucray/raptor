@@ -13,7 +13,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/raptor-ops-env.sh
 
-./mvnw -q install -DskipTests
+# `clean`, always (#29): the resources plugin never deletes an output it copied
+# earlier, so without it a migration removed from the tree is still in
+# target/classes, goes into the image, and Flyway applies it to live.
+./mvnw -q clean install -DskipTests
 ./mvnw -q -pl app spring-boot:build-image -DskipTests \
   -Dspring-boot.build-image.imageName=ghcr.io/stucray/raptor:local
 

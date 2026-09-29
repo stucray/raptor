@@ -94,10 +94,11 @@ class PartitionMaintenanceIntegrationTest {
 					rs.getObject("upper_bound", OffsetDateTime.class)))
 			.list();
 
-		// The existing partitions sit on 17:00Z, not midnight: the migration's block
-		// used date bounds cast in the session's timezone, on a laptop at UTC+7.
-		// Anything computing "the next month" from a clock leaves a seven-hour hole
-		// here — or an overlap, which PostgreSQL refuses outright.
+		// Not every bound sits on midnight UTC: V3's block cast date bounds in the
+		// session's timezone, and the months it made that hold rows keep them (#26).
+		// Anything computing "the next month" from a clock leaves a hole wherever a
+		// bound is not where the clock expects it — or an overlap, which PostgreSQL
+		// refuses outright.
 		assertThat(bounds).hasSizeGreaterThan(1);
 		for (int i = 1; i < bounds.size(); i++) {
 			assertThat(bounds.get(i).lower())
