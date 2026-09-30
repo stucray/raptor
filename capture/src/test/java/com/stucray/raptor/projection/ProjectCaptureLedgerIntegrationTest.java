@@ -303,12 +303,13 @@ class ProjectCaptureLedgerIntegrationTest {
 	 * A message the exchange published just before the recorder opened the session
 	 * still counts.
 	 *
-	 * <p>The partition floor is derived from {@code started_at}, and {@code pt} is
-	 * Betfair's clock rather than ours — so a bound of {@code started_at} itself
-	 * would drop this row silently. Truncating to the month is what makes it safe,
-	 * and an evening-boundary case is chosen deliberately: a floor bug that only
-	 * loses rows in the first seconds of a session is invisible to a fixture whose
-	 * messages all sit comfortably inside it.
+	 * <p>{@code pt} is Betfair's clock and {@code started_at} is ours, so any
+	 * bound on one derived from the other drops this row silently. Until #33 the
+	 * aggregate carried such a bound, a {@code pt} floor that pruned partitions,
+	 * and was safe only because it was truncated to the month. It has no bound now,
+	 * and this is what keeps one from coming back: a floor bug that only loses rows
+	 * in the first seconds of a session is invisible to a fixture whose messages
+	 * all sit comfortably inside it.
 	 */
 	@Test
 	void countsAMessagePublishedJustBeforeTheSessionOpened() throws Exception {
@@ -318,7 +319,7 @@ class ProjectCaptureLedgerIntegrationTest {
 		run();
 
 		assertThat(one("messages", borderline))
-				.as("pt one second before started_at is inside the session's month")
+				.as("a message published one second before started_at is the session's")
 				.isEqualTo(1);
 	}
 

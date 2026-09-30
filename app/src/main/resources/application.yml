@@ -95,12 +95,10 @@ management:
           # Removing it from the list is the load-bearing half — the indicator
           # itself survives until #256, and with the close-out off it would
           # publish `stale: true` every night forever.
-          # `partitionRunway` cannot turn the group over (it is always
-          # UP and carries a `low` flag instead): restarting a JVM does not
-          # create a partition, and the thing it warns about is known months
-          # ahead. It is in the list because the list is explicit — a new
-          # contributor does NOT join a group that names its members.
-          include: recorder,scope,spill,captureCoverage,partitionRunway
+          # The list is explicit: a new contributor does NOT join a group
+          # that names its members. `partitionRunway` left it with the
+          # partitions themselves (#33).
+          include: recorder,scope,spill,captureCoverage
           show-details: always
 
 raptor:
@@ -127,31 +125,6 @@ raptor:
     # creates paddock_reader's, so a fresh database needs no provisioning step.
     # overround-analysis is configured with the same value.
     password: ${RAPTOR_ANALYSIS_PASSWORD:dev}
-  raw-store:
-    # THE SYSTEM OF RECORD'S OWN SCHEMA, not the thing writing to it (#267).
-    #
-    # raw.stream_message is `partition by range (pt)`, and a row outside every
-    # partition is rejected outright — the recorder then cannot write the system
-    # of record at all. V3 pre-created twelve months from the moment the
-    # migration ran, and a Flyway migration never runs again, so for a year the
-    # runway shrank by a day a day with nothing extending it and nothing saying
-    # so. PartitionMaintenance is what moves it now; partitionRunway is what
-    # reports it when PartitionMaintenance has stopped.
-    #
-    # How much runway the extender tops the table back up to.
-    partition-runway-target: ${RAPTOR_PARTITION_TARGET:365d}
-    # And how little may remain before partitionRunway calls it low. Well inside
-    # the target on purpose: the gap between the two is the room in which the
-    # extender is expected to work, so the warning fires only when it has not.
-    # Two thresholds a day apart would make every ordinary top-up look like a
-    # rescue, and a warning that only trips inside a fortnight is one that trips
-    # during a card, when nothing can be done about it.
-    partition-runway-warning: ${RAPTOR_PARTITION_WARNING:120d}
-    # Daily, because the unit of work is a month. The initial delay is what
-    # covers a machine that has been off long enough to matter, and is long
-    # enough that no test context lives to see the DDL.
-    partition-check-interval: ${RAPTOR_PARTITION_INTERVAL:24h}
-    partition-check-initial-delay: ${RAPTOR_PARTITION_INITIAL_DELAY:2m}
   recorder:
     # Whether this instance may record. On is not a promise to record: an
     # instance that cannot take the single-writer lease stands by, and one with

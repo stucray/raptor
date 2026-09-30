@@ -62,7 +62,7 @@ class RawMessageExtractor {
 
 				JsonNode pt = message.get("pt");
 				if (pt == null || pt.isNull()) {
-					// pt is the partition key and is declared not null. A message
+					// pt is declared not null. A message
 					// without one cannot be stored or ordered, so skip it rather than
 					// invent a timestamp — and never silently substitute now().
 					continue;

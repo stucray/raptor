@@ -161,13 +161,15 @@ final class RawWriteLoop implements Runnable {
 	 * violation. Both mean the server read the row and would not have it.
 	 *
 	 * <p>Measured against this server rather than recalled: 23503 is a session id
-	 * with no {@code raw.capture_session} row, 23514 a {@code pt} outside every
-	 * partition range and also the provenance check, 23502 a null in a not-null
-	 * column, 22P02 a payload that is not valid JSON.
+	 * with no {@code raw.capture_session} row, 23514 the provenance check, 23502
+	 * a null in a not-null column, 22P02 a payload that is not valid JSON, and
+	 * 23505 a row whose {@code (session_id, seq, market_id)} is already stored
+	 * (#33). Until #33, 23514 was also a {@code pt} outside every partition range.
 	 *
 	 * <p>None of them has ever fired here, and the realistic causes are
 	 * schema-shaped rather than payload-shaped — a migration adding a constraint
-	 * under a running recorder, a partition set that ran out (#267). That is
+	 * under a running recorder, a partition set that ran out (#267, before the
+	 * table stopped being partitioned). That is
 	 * still worth defending: those are deploy-time events, and the recorder
 	 * should survive one rather than wedge on it.
 	 *

@@ -74,7 +74,7 @@ final class StreamFramer {
 
 		JsonNode pt = message.get("pt");
 		if (pt == null || pt.isNull()) {
-			// pt is the partition key and is declared not null. Skip rather than
+			// pt is declared not null. Skip rather than
 			// invent a timestamp, and never substitute now(): a message stored under
 			// the wrong publish time is worse than a message not stored, because
 			// nothing downstream can tell.

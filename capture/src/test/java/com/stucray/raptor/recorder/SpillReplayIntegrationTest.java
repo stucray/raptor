@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.stucray.raptor.TestcontainersConfiguration;
 import com.stucray.raptor.datasource.Acquisition;
 import com.stucray.raptor.rawstore.RawMessage;
+import com.stucray.raptor.rawstore.RawWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,6 +49,7 @@ class SpillReplayIntegrationTest {
 	@Autowired SpillDrain drain;
 	@Autowired Clock clock;
 	@Autowired @Acquisition JdbcClient jdbc;
+	@Autowired RawWriter writer;
 
 	@DynamicPropertySource
 	static void spillDirectory(DynamicPropertyRegistry registry) {
@@ -159,6 +161,31 @@ class SpillReplayIntegrationTest {
 		assertThat(jdbc.sql("select count(*) from raw.spill_file").query(Long.class).single())
 				.isEqualTo(1);
 		assertThat(replayer.pending()).isEmpty();
+	}
+
+	/**
+	 * A spilled batch that had in fact been stored cannot be stored twice (#33).
+	 *
+	 * <p>The recorder spills when a write's outcome is unknown, and "unknown"
+	 * includes a COPY that committed on the server while the client saw the
+	 * connection fail. Replaying that file used to put every message in again.
+	 * The session key now refuses it: the replay fails, nothing is duplicated,
+	 * and the file is kept, because a file is only ever deleted after a commit.
+	 */
+	@Test
+	void aFileWhoseMessagesAreAlreadyStoredCannotDuplicateThem() throws Exception {
+		// The COPY that committed although the recorder never heard back.
+		writer.write(spilled);
+		assertThat(rows()).isEqualTo(spilled.size());
+
+		List<JobExecution> executions = replayer.replayPending();
+
+		assertThat(executions).singleElement()
+				.extracting(JobExecution::getStatus).isEqualTo(BatchStatus.FAILED);
+		assertThat(rows()).as("the key refuses the second copy").isEqualTo(spilled.size());
+		assertThat(jdbc.sql("select count(*) from raw.spill_file").query(Long.class).single())
+				.as("the ledger row rolled back with the refused write").isZero();
+		assertThat(replayer.pending()).as("never deleted without a commit").hasSize(1);
 	}
 
 	/**

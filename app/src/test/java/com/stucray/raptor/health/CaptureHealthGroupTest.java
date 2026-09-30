@@ -46,7 +46,7 @@ class CaptureHealthGroupTest {
 	void theGroupIsExactlyCaptureSContributors() throws Exception {
 		mvc.perform(get("/actuator/health/capture"))
 				.andExpect(status().isOk())
-				// The five that remain. Present rather than merely configured: the
+				// The four that remain. Present rather than merely configured: the
 				// `include` list names a contributor that may not exist, and Boot
 				// does not complain — it simply omits it, which reads identically
 				// to a healthy component nobody asked about.
@@ -54,16 +54,18 @@ class CaptureHealthGroupTest {
 				.andExpect(jsonPath("$.components.scope").exists())
 				.andExpect(jsonPath("$.components.spill").exists())
 				.andExpect(jsonPath("$.components.captureCoverage").exists())
-				.andExpect(jsonPath("$.components.partitionRunway").exists())
+				// Gone with the partitions (#33). The heartbeat reads a missing
+				// runway contributor as silence, so its absence alerts nobody.
+				.andExpect(jsonPath("$.components.partitionRunway").doesNotExist())
 				// THE CUTOVER ASSERTION (#255). The heartbeat reads this payload
 				// every five minutes and had a STALE-ANALYSIS probe keyed on
 				// `.components.analysis.details.stale`; that probe is gone, and
 				// this is what keeps the thing it read from coming back.
 				.andExpect(jsonPath("$.components.analysis").doesNotExist())
-				// And the count, so that a SIXTH contributor cannot arrive
+				// And the count, so that a FIFTH contributor cannot arrive
 				// unnoticed. A new member is a deliberate act — the list names its
 				// members precisely so that adding one is a decision someone makes
 				// rather than a consequence of declaring a bean.
-				.andExpect(jsonPath("$.components.length()").value(5));
+				.andExpect(jsonPath("$.components.length()").value(4));
 	}
 }

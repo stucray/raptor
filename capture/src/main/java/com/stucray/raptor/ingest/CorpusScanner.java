@@ -50,8 +50,8 @@ class CorpusScanner {
 	 * the Batch job partitions on and it must be knowable without opening the
 	 * file. The two can disagree — a market whose pt crosses midnight on the last
 	 * of the month sits in the previous month's directory — which is exactly why
-	 * the partition key here is a UNIT OF WORK, not the table partition. Rows are
-	 * routed to table partitions by their own pt.
+	 * the partition key here is a UNIT OF WORK and says nothing about how the rows
+	 * are stored.
 	 */
 	public String monthOf(Path file) {
 		Path relative = corpusRoot.relativize(file);

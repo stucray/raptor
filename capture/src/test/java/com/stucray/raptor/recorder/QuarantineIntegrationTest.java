@@ -33,8 +33,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * had a message refused, and the corpus was searched before this was written —
  * 221,780 files with no unicode escape of any form in them. What is being
  * defended against is a class of failure with realistic schema-shaped causes: a
- * migration that adds a constraint under a running recorder, a partition set
- * that ran out (#267), or the one staged here.
+ * migration that adds a constraint under a running recorder, a row whose key is
+ * already stored (#33), or the one staged here.
  *
  * <p><b>A foreign key, deliberately, and not the alternatives.</b> A
  * {@code session_id} with no {@code raw.capture_session} row is refused with

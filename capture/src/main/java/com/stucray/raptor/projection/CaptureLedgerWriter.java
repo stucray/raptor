@@ -1,9 +1,6 @@
 package com.stucray.raptor.projection;
 
 import com.stucray.raptor.datasource.Acquisition;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
@@ -27,8 +24,8 @@ import org.springframework.stereotype.Component;
  *
  * <p>It used to replace both tables wholesale every run, which meant two
  * aggregates over every row of {@code raw.stream_message} that carries a
- * session — 14.8M rows of a 34.1M-row, 13 GB, 103-partition table, growing with
- * every capture. On a five-minute timer against a pool whose {@code
+ * session — 14.8M rows of a 34.1M-row, 13 GB table, growing with every
+ * capture. On a five-minute timer against a pool whose {@code
  * socketTimeout} is 30s, the step reached a 26s average and started losing runs
  * to the driver killing the connection mid-statement. Measured breakdown of that
  * scan: {@code count(*)} 5.3s, {@code count(distinct market_id)} <b>14.2s</b>,
@@ -54,21 +51,14 @@ import org.springframework.stereotype.Component;
  * guard is not a time window but the record itself: a session is stale while it
  * has a spill file ingested after the projection run that derived its row.
  * {@code raw.spill_file} is a handful of rows, so asking costs nothing.
- * <li><b>Partition pruning by {@code pt}, not a new index.</b> The table is
- * {@code range (pt)} by month and has no index on {@code session_id} at all, so
- * {@code where session_id in (…)} alone would still read everything. Bounding
- * {@code pt} below by the stale sessions' own month prunes to a partition or
- * two. Verified against all 83 sessions: the smallest gap between a session's
- * first message {@code pt} and its {@code started_at} is <b>+0.15s</b> — no
- * session has ever received a message published before it began — and truncating
- * to the month leaves a month of slack on top of that.
+ * <li><b>Reached through the session key, and through nothing else.</b> The
+ * table's only indexes are the ones its uniqueness needs (#33), and {@code
+ * unique (session_id, seq, market_id)} leads with the session. Both aggregates
+ * select by session id, so a run reads the stale sessions' rows and no others.
+ * Until #33 the table was partitioned by {@code pt} and both queries carried a
+ * {@code pt} floor to prune it; with no partitions there is nothing to prune and
+ * no floor.
  * </ul>
- *
- * <p>The scope half needs the {@code pt} bound too, which is worth stating
- * because it reads as though it should not: {@code (market_id, pt)} is indexed,
- * and restricting to sixty market ids still got a parallel sequential scan over
- * all 103 partitions until the time bound was added. An index on the leading
- * column is not the same thing as the planner electing to use it.
  *
  * <p><b>The contract is unchanged where it matters.</b> Every row is still a
  * pure function of {@code raw}, and {@link #write(long, boolean)} with {@code
@@ -114,11 +104,7 @@ class CaptureLedgerWriter {
 	private static final String FREEZE_GRACE = "15 minutes";
 
 	/**
-	 * The aggregate for one run's worth of sessions.
-	 *
-	 * <p>{@code :ptFloor} is what makes this cheap — see the class comment. It is
-	 * a bind parameter rather than a scalar subquery so that pruning is decided
-	 * from a value the executor has in hand.
+	 * The aggregate for one run's worth of sessions, read through the session key.
 	 */
 	private static final String PROJECT_SESSIONS_SQL = """
 			insert into ledger.capture_session (
@@ -153,10 +139,6 @@ class CaptureLedgerWriter {
 					max(received_at)          as last_message_at
 				from raw.stream_message
 				where session_id in (:sessionIds)
-					-- Prunes the partitions. Without it this reads all 103 of them
-					-- looking for a column no index covers; see the class comment
-					-- for why the bound is safe.
-					and pt >= :ptFloor
 				group by session_id
 			) m on m.session_id = s.id
 			left join (
@@ -185,18 +167,6 @@ class CaptureLedgerWriter {
 	 * its numbers can be checked against the rows. It is what makes "subscribed
 	 * and silent" a fact instead of an inference.
 	 *
-	 * <p>Bounded by {@code pt} for the same reason as the sessions aggregate, and
-	 * the reason is worth recording because the obvious expectation is wrong:
-	 * {@code (market_id, pt)} <em>is</em> indexed, but with sixty ids and no time
-	 * bound the planner still chooses a parallel sequential scan across all 103
-	 * partitions — measured at 1.69s and 523k buffers read. Adding the floor
-	 * prunes it to a bitmap scan over the recent partitions: 602ms, 322k buffers.
-	 * An index on the leading column is not the same thing as the planner electing
-	 * to use it.
-	 *
-	 * <p>The floor comes from {@code first_seen_at}, which is {@code not null}, so
-	 * it needs no fallback.
-	 *
 	 * <p><b>Counted over the sessions that ran while the market was in scope</b>
 	 * (raptor#32), not over every session row carrying its id: a session whose span
 	 * overlaps the market's, from {@code first_seen_at} to the {@code
@@ -209,6 +179,16 @@ class CaptureLedgerWriter {
 	 * 2,866 scoped markets: 2,762 equal, 104 with nothing under either.
 	 */
 	private static final String PROJECT_SCOPE_SQL = """
+			with w as (
+				select sc.market_id, cs.id as session_id
+				from raw.market_scope sc
+				join raw.capture_session cs
+					on cs.started_at <= case when sc.state = 'DONE' then sc.state_changed_at
+							else cast('infinity' as timestamptz) end
+					and coalesce(cs.ended_at, cast('infinity' as timestamptz))
+						>= sc.first_seen_at
+				where sc.market_id in (:marketIds)
+			)
 			insert into ledger.market_scope (
 				market_id, event_id, event_name, competition_id, competition_name,
 				market_type, country_code, kickoff, requested, state, exit_reason,
@@ -220,26 +200,23 @@ class CaptureLedgerWriter {
 				coalesce(m.messages, 0), :ledgerRunId
 			from raw.market_scope s
 			left join (
-				select w.market_id, count(*) as messages
-				from (
-					select sc.market_id, cs.id as session_id
-					from raw.market_scope sc
-					join raw.capture_session cs
-						on cs.started_at <= case when sc.state = 'DONE' then sc.state_changed_at
-								else cast('infinity' as timestamptz) end
-						and coalesce(cs.ended_at, cast('infinity' as timestamptz))
-							>= sc.first_seen_at
-					where sc.market_id in (:marketIds)
-				) w
-				join raw.stream_message r
-					on r.session_id = w.session_id and r.market_id = w.market_id
-				-- Both redundant with the join and neither removable. The market list
-				-- lets the planner filter the scan itself: 339ms without it, 220ms
-				-- with, against 189ms for the query this replaced (2026-09-30, 36
-				-- markets of one weekend, median of five). The floor prunes partitions;
-				-- see this constant's javadoc.
-				where r.market_id in (:marketIds)
-					and r.pt >= :ptFloor
+				select w.market_id, cast(sum(c.n) as bigint) as messages
+				from w
+				join (
+					select r.session_id, r.market_id, count(*) as n
+					from raw.stream_message r
+					-- An ARRAY, not `in (select ...)`, and the difference is the whole
+					-- cost. The session key is (session_id, seq, market_id): given the
+					-- sessions as an array, each is a range scan of its own entries
+					-- with the markets filtered inside it. Given a subquery, or only
+					-- the market list, the planner walks the entire 2.4 GB index,
+					-- because market_id is its third column. Rehearsed on a restored
+					-- backup (#33, 51.3M rows, 40 markets of one weekend): 455ms this
+					-- way, 6.4s and 17.7s the other two, with identical counts.
+					where r.session_id = any (array(select distinct session_id from w))
+						and r.market_id in (:marketIds)
+					group by r.session_id, r.market_id
+				) c on c.session_id = w.session_id and c.market_id = w.market_id
 				group by w.market_id
 			) m on m.market_id = s.market_id
 			where s.market_id in (:marketIds)""";
@@ -257,15 +234,14 @@ class CaptureLedgerWriter {
 			from raw.capture_gap g""";
 
 	/**
-	 * The sessions whose aggregates can still change, with the {@code started_at}
-	 * that sets the partition floor.
+	 * The sessions whose aggregates can still change.
 	 *
 	 * <p>A session qualifies if it is open, if it closed recently enough to still
 	 * be draining, or if it has no projected row at all — which covers both a new
 	 * session and the first run after a full rebuild.
 	 */
 	private static final String STALE_SESSIONS_SQL = """
-			select s.id, s.started_at
+			select s.id
 			from raw.capture_session s
 			where s.ended_at is null
 				or s.ended_at > now() - cast(:grace as interval)
@@ -295,8 +271,7 @@ class CaptureLedgerWriter {
 						and f.ingested_at > p.started_at)""";
 
 	/** Every session, for a full rebuild. */
-	private static final String ALL_SESSIONS_SQL =
-			"select s.id, s.started_at from raw.capture_session s";
+	private static final String ALL_SESSIONS_SQL = "select s.id from raw.capture_session s";
 
 	/**
 	 * The markets whose message count can still change.
@@ -306,7 +281,7 @@ class CaptureLedgerWriter {
 	 * whole of "has left scope" rather than a guess at it.
 	 */
 	private static final String STALE_MARKETS_SQL = """
-			select s.market_id, s.first_seen_at
+			select s.market_id
 			from raw.market_scope s
 			where s.state <> 'DONE'
 				or s.state_changed_at > now() - cast(:grace as interval)
@@ -339,8 +314,7 @@ class CaptureLedgerWriter {
 					where f.ingested_at > p.started_at)""";
 
 	/** Every scoped market, for a full rebuild. */
-	private static final String ALL_MARKETS_SQL =
-			"select s.market_id, s.first_seen_at from raw.market_scope s";
+	private static final String ALL_MARKETS_SQL = "select s.market_id from raw.market_scope s";
 
 	private final JdbcClient jdbc;
 
@@ -368,15 +342,13 @@ class CaptureLedgerWriter {
 	 *     full == false}, not the table's size
 	 */
 	Written write(long ledgerRunId, boolean full) {
-		List<StaleSession> staleSessions = jdbc.sql(full ? ALL_SESSIONS_SQL : STALE_SESSIONS_SQL)
+		List<Long> staleSessions = jdbc.sql(full ? ALL_SESSIONS_SQL : STALE_SESSIONS_SQL)
 				.param("grace", FREEZE_GRACE)
-				.query((rs, row) -> new StaleSession(
-						rs.getLong("id"), rs.getObject("started_at", OffsetDateTime.class)))
+				.query(Long.class)
 				.list();
-		List<StaleMarket> staleMarkets = jdbc.sql(full ? ALL_MARKETS_SQL : STALE_MARKETS_SQL)
+		List<String> staleMarkets = jdbc.sql(full ? ALL_MARKETS_SQL : STALE_MARKETS_SQL)
 				.param("grace", FREEZE_GRACE)
-				.query((rs, row) -> new StaleMarket(rs.getString("market_id"),
-						rs.getObject("first_seen_at", OffsetDateTime.class)))
+				.query(String.class)
 				.list();
 
 		if (full) {
@@ -390,69 +362,33 @@ class CaptureLedgerWriter {
 
 		long sessions = 0;
 		if (!staleSessions.isEmpty()) {
-			List<Long> ids = staleSessions.stream().map(StaleSession::id).toList();
 			if (!full) {
 				jdbc.sql("delete from ledger.capture_session where session_id in (:sessionIds)")
-						.param("sessionIds", ids)
+						.param("sessionIds", staleSessions)
 						.update();
 			}
 			sessions = jdbc.sql(PROJECT_SESSIONS_SQL)
 					.param("ledgerRunId", ledgerRunId)
-					.param("sessionIds", ids)
-					.param("ptFloor", monthFloor(
-							staleSessions.stream().map(StaleSession::startedAt).toList()))
+					.param("sessionIds", staleSessions)
 					.update();
 		}
 
 		long scoped = 0;
 		if (!staleMarkets.isEmpty()) {
-			List<String> ids = staleMarkets.stream().map(StaleMarket::marketId).toList();
 			if (!full) {
 				jdbc.sql("delete from ledger.market_scope where market_id in (:marketIds)")
-						.param("marketIds", ids)
+						.param("marketIds", staleMarkets)
 						.update();
 			}
 			scoped = jdbc.sql(PROJECT_SCOPE_SQL)
 					.param("ledgerRunId", ledgerRunId)
-					.param("marketIds", ids)
-					.param("ptFloor", monthFloor(staleMarkets.stream()
-							.map(StaleMarket::firstSeenAt).toList()))
+					.param("marketIds", staleMarkets)
 					.update();
 		}
 
 		long gaps = jdbc.sql(PROJECT_GAPS_SQL).param("ledgerRunId", ledgerRunId).update();
 		return new Written(sessions, scoped, gaps);
 	}
-
-	/**
-	 * The lower bound on {@code pt} for the stale sessions' messages, truncated to
-	 * the start of the earliest one's month.
-	 *
-	 * <p>Truncating rather than using {@code started_at} itself is the whole
-	 * safety margin: a message's {@code pt} is Betfair's publish time and the
-	 * session's start is ours, and while no session in the corpus has ever
-	 * received a message published before it began — the smallest observed gap is
-	 * +0.15s — a bound that depended on that staying true would undercount
-	 * silently if it ever stopped. The partitions are monthly, so the slack is
-	 * free: it admits at most one extra partition.
-	 *
-	 * <p>Returned as {@link OffsetDateTime} because pgjdbc cannot infer a SQL type
-	 * for {@code Instant}.
-	 */
-	private static OffsetDateTime monthFloor(List<OffsetDateTime> starts) {
-		return starts.stream()
-				.min(OffsetDateTime::compareTo)
-				.orElseThrow()
-				.withOffsetSameInstant(ZoneOffset.UTC)
-				.withDayOfMonth(1)
-				.truncatedTo(ChronoUnit.DAYS);
-	}
-
-	/** A session to re-derive, with what its partition floor is computed from. */
-	private record StaleSession(long id, OffsetDateTime startedAt) {}
-
-	/** A scoped market to re-derive, likewise. */
-	private record StaleMarket(String marketId, OffsetDateTime firstSeenAt) {}
 
 	record Written(long sessions, long scopedMarkets, long gaps) {}
 
