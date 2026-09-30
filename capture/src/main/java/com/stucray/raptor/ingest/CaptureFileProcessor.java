@@ -44,11 +44,14 @@ class CaptureFileProcessor implements ItemProcessor<Path, CaptureLoad> {
 		this.scanner = scanner;
 		this.extractor = extractor;
 		this.jdbc = jdbc;
+		// From the sessions to their messages, by the session key: the table has
+		// no index but the ones its uniqueness needs (#33), and this one leads
+		// with the session.
 		this.residentMarkets = Set.copyOf(jdbc.sql("""
 						select distinct m.market_id
 						from raw.stream_message m
-						join raw.capture_session s on s.id = m.session_id
-						where s.source_key is null""")
+						where m.session_id in (
+							select s.id from raw.capture_session s where s.source_key is null)""")
 				.query(String.class)
 				.list());
 		this.sessions = ImportedSessions.load(jdbc);

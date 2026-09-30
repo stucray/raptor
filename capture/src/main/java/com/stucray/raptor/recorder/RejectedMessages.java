@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
  * distinguishes this from a spill — and V29's table is built so that nothing
  * about it can refuse what {@code raw.stream_message} refused: {@code payload}
  * is {@code text} rather than {@code jsonb}, there are no foreign keys, no
- * check constraints and no partitions, and every column that can be null in a
+ * check constraints and no unique keys, and every column that can be null in a
  * rejection is nullable. The migration header sets out each one against the
  * SQLSTATE it answers.
  *

@@ -59,14 +59,7 @@ class ScheduledTasksTest {
 			// Betfair session keep-alive.
 			"BetfairSession",
 			// The ledger projection behind the health screen.
-			"CaptureLedgerRefresh",
-			// What keeps raw.stream_message supplied with partitions to write into
-			// (#267). Unregistered, the runway shrinks by a day a day until every
-			// insert fails with "no partition of relation found for row" — and the
-			// recorder cannot write the system of record at all. The class was
-			// described in V3's comment and not written for a year, so an absent
-			// timer here is not a hypothetical failure mode.
-			"PartitionMaintenance");
+			"CaptureLedgerRefresh");
 
 	/**
 	 * Timers that have been retired, and must stay retired.
@@ -96,7 +89,10 @@ class ScheduledTasksTest {
 			// POST /ops/close-out instead. A cron coming back beside that agent
 			// would sweep the archive twice a night, the second time behind the
 			// close-out lock's refusal at best.
-			"NightlyCloseOut");
+			"NightlyCloseOut",
+			// The partition extender (#267), deleted by #33 when raw.stream_message
+			// stopped being partitioned. There is nothing for it to extend.
+			"PartitionMaintenance");
 
 	@Autowired ScheduledTaskHolder scheduledTasks;
 

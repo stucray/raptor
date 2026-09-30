@@ -39,7 +39,7 @@ final class RecordingWriter implements RawWriter {
 	/**
 	 * Refuse any batch containing a message this matches, with {@code sqlState}.
 	 *
-	 * <p>Models a row the server will not have — a missing partition, a null in a
+	 * <p>Models a row the server will not have — a duplicate key, a null in a
 	 * not-null column, or a payload carrying a NUL escape that {@code jsonb}
 	 * refuses. Unlike {@link #failNext}, it never stops: the same bytes are
 	 * refused every time they are offered, which is the property that makes

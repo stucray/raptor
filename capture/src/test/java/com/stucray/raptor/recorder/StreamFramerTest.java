@@ -144,7 +144,7 @@ class StreamFramerTest {
 	/**
 	 * No publish time, no row — and never {@code now()} in its place.
 	 *
-	 * <p>{@code pt} is the partition key. A message stored under an invented
+	 * <p>{@code pt} is not null in the table. A message stored under an invented
 	 * publish time is worse than a message not stored, because nothing downstream
 	 * can tell which it was.
 	 */
