@@ -322,12 +322,86 @@ class ProjectCaptureLedgerIntegrationTest {
 				.isEqualTo(1);
 	}
 
+	/**
+	 * A scope row whose time in scope brackets the seeded {@code recorded} session:
+	 * first seen an hour before it opens, and (if {@code DONE}) leaving half an hour
+	 * after it closes, before {@code empty} starts. Explicit because the columns
+	 * default to {@code now()}, which would put scope weeks after every session here
+	 * and make each market read as silent for a reason no real row could produce.
+	 */
+	/**
+	 * A market carried across a reconnect is counted in both sessions (raptor#32).
+	 * The count is taken over every session that ran while the market was in
+	 * scope, so a recorder restart mid-match must not halve it.
+	 */
+	@Test
+	void aMarketSeenByTwoSessionsCountsBoth() throws Exception {
+		scoped("1.3", true, "DONE", "CLOSED", START.minusSeconds(3600), START.plusSeconds(9000));
+		long reconnected = session(null, START.plusSeconds(3700), START.plusSeconds(8000),
+				"RESIDENT", "COMPLETED", "framed=2 written=2");
+		message(recorded, "1.3", START.plusSeconds(40));
+		message(reconnected, "1.3", START.plusSeconds(3800));
+		message(reconnected, "1.3", START.plusSeconds(3900));
+
+		run();
+
+		assertThat(scopeMessages("1.3")).isEqualTo(3);
+	}
+
+	/**
+	 * What defines the count (raptor#32): the sessions that ran while the market was
+	 * in scope. A row for the same market id in a session that ran entirely after it
+	 * left scope is not what scope asked for, and is not counted. None exists on the
+	 * live database (2026-09-30: every scoped market's count was unchanged by this
+	 * rule); the test pins the definition, not a repair.
+	 */
+	@Test
+	void aSessionOutsideTheMarketsTimeInScopeIsNotCounted() throws Exception {
+		scoped("1.1", true, "DONE", "CLOSED");
+		long later = session(null, START.plusSeconds(20_000), START.plusSeconds(21_000),
+				"RESIDENT", "COMPLETED", "framed=1 written=1");
+		message(later, "1.1", START.plusSeconds(20_100));
+
+		run();
+
+		assertThat(scopeMessages("1.1"))
+				.as("the two messages in `recorded`, not the one after the market left scope")
+				.isEqualTo(2);
+	}
+
+	/**
+	 * A market's count picks up a spill replayed long after its session closed.
+	 * The session-side test above proves the session row moves; this proves the
+	 * market row does too, now that the market count reaches its rows through the
+	 * session.
+	 */
+	@Test
+	void aSpillIngestedLongAfterwardsIsCountedForTheMarket() throws Exception {
+		scoped("1.1", true, "DONE", "CLOSED");
+		run();
+		assertThat(scopeMessages("1.1")).isEqualTo(2);
+
+		message(recorded, "1.1", START.plusSeconds(55));
+		spillFile(recorded, 1);
+		run();
+
+		assertThat(scopeMessages("1.1")).isEqualTo(3);
+	}
+
 	private void scoped(String marketId, boolean requested, String state, String exitReason) {
+		scoped(marketId, requested, state, exitReason, START.minusSeconds(3600),
+				START.plusSeconds(5400));
+	}
+
+	private void scoped(String marketId, boolean requested, String state, String exitReason,
+			Instant firstSeen, Instant stateChanged) {
 		jdbc.sql("""
 						insert into raw.market_scope
-							(market_id, market_type, requested, state, exit_reason, kickoff)
-						values (?, 'MATCH_ODDS', ?, ?, ?, ?)""")
-				.params(Arrays.asList(marketId, requested, state, exitReason, at(START)))
+							(market_id, market_type, requested, state, exit_reason, kickoff,
+							 first_seen_at, state_changed_at)
+						values (?, 'MATCH_ODDS', ?, ?, ?, ?, ?, ?)""")
+				.params(Arrays.asList(marketId, requested, state, exitReason, at(START),
+						at(firstSeen), at(stateChanged)))
 				.update();
 	}
 
