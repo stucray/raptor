@@ -31,12 +31,13 @@
 #
 # GROWTH, AND THE UPGRADE PATH. Measured 2026-09-06: 12 GB of `raw` dumps to
 # 596 MB in 53 s (jsonb text compresses ~20:1). At a full season of raw (~95 GB)
-# expect ~5 GB and ~7 minutes, and RETAIN_DAYS copies of it. When that stops
-# being comfortable, the upgrade is per-partition dumps — `raw.stream_message`
-# is monthly RANGE(pt) partitioned and a sealed month never changes, so old
-# partitions need dumping exactly once. Deliberately NOT done here: it needs
-# state tracking, and the failure mode of this script is "silently stops
-# working", which argues for the version with least logic to get wrong.
+# expect ~5 GB and ~7 minutes, and RETAIN_DAYS copies of it. The upgrade this
+# note used to name — dumping each sealed monthly partition once — went with
+# the partitions (#33): `raw.stream_message` is one plain append-only table now.
+# When a whole dump stops being comfortable, the equivalent is incremental by
+# `id`, which only ever grows. Deliberately NOT done here: it needs state
+# tracking, and the failure mode of this script is "silently stops working",
+# which argues for the version with least logic to get wrong.
 #
 # DEPLOY: `bin/deploy-agents`. The launchd job runs a copy OUTSIDE the repo, in
 # the state directory (RAPTOR_STATE_DIR), so a branch checkout cannot rewrite or delete it mid-run — that
