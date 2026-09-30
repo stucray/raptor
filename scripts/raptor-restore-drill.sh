@@ -15,37 +15,29 @@
 # way. It never connects to the live database container except to read counts, and it
 # never writes to it at all.
 #
-# DRIFT, AND WHY THE COMPARISON IS SPLIT. Live capture keeps appending, so a
-# naive "restored == live" would fail for any month still being written. But
-# `raw.stream_message` is monthly RANGE(pt) partitioned and a SEALED month never
-# changes again, so:
-#   - sealed partitions (any month before the current one) must match EXACTLY;
-#     a mismatch there is a real fault, and the bulk of the corpus lives here.
-#   - the current partition must be non-empty and no larger than live, which is
-#     the only honest statement when rows are arriving between the dump and now.
-#   - every ORDINARY raw table (sessions, gaps, scope, file ledgers) must match
-#     live counted only up to the highest key the RESTORE holds (#24). These
-#     grow too — a day of capture adds sessions, gaps and scope rows — and were
-#     once compared exactly, which held only while the drill ran minutes after
-#     the backup it drilled. On 2026-09-27 the backup ran long, the drill found
-#     only the previous day's dump, and went red about a backup that was fine.
-#     The key is the identity `id`, or `first_seen_at` for market_scope, which
-#     has none; both are read from the restored server, so no clock is trusted —
-#     the dump's filename is the host's, and the VM's can wake an hour behind.
-#     A table with no known key is held only to restored <= live, and named.
-# That is drift-free without needing to know the dump's exact snapshot instant.
+# DRIFT. Live capture keeps appending, so a naive "restored == live" would fail
+# for every table still being written. So every raw table with a known key must
+# match live counted only up to the highest key the RESTORE holds (#24):
+#   - `raw.stream_message` by its surrogate `id` (#33). It is the corpus, and a
+#     drill that compared none of it has verified nothing, so a restore in which
+#     it holds no rows fails outright.
+#   - the other ordinary tables (sessions, gaps, scope, file ledgers) likewise.
+#     They were once compared exactly, which held only while the drill ran
+#     minutes after the backup it drilled; on 2026-09-27 the backup ran long, the
+#     drill found only the previous day's dump, and went red about a backup that
+#     was fine.
+# The key is the identity `id`, or `first_seen_at` for market_scope, which has
+# none; both are read from the restored server, so no clock is trusted — the
+# dump's filename is the host's, and the VM's can wake an hour behind. A table
+# with no known key is held only to restored <= live, and named.
 #
-# AND THE SAME DRIFT HAPPENS TO THE TABLE SET, WHICH IS WHY THE DUMP'S INSTANT
-# IS READ AFTER ALL (#279). A live table absent from the restore is normally the
-# one fault the row loop cannot see, so it aborts — but #272 shipped a daily job
-# whose entire purpose is creating partitions, and a partition created after the
-# dump was taken is absent from it correctly. That is drift of exactly the kind
-# the row comparison already tolerates, and treating it as a fault cost a week of
-# red: `finish FAILED` exits, so the run that alerted never compared a single
-# sealed partition. The split is by the partition's own bound, read from the live
-# catalogue: a partition whose range begins at or after the dump instant (or the
-# DEFAULT partition) may be missing, and only if it is EMPTY in live, so no row
-# can hide behind the tolerance. Anything else missing is still a hard stop.
+# UNTIL #35: `raw.stream_message_partitioned`, the table V38 set aside, still
+# has its partitions. Nothing writes them, so each must match live exactly.
+#
+# The table SET must match too, with no exceptions. Until #33 a partition
+# created after the dump was legitimately absent from it (#279) and was
+# tolerated; nothing creates tables on a timer any more, so a live table the
+# restore lacks is a fault again, always.
 #
 # WHEN. Weekly, in the same UTC quiet window as the backup and shortly after it
 # — after the previous card has finished and before scope opens for the next.
@@ -164,19 +156,6 @@ age_days=$(( ( $(date +%s) - $(stat -f%m "$dump") ) / 86400 ))
 if (( age_days > 2 )); then
   finish FAILED "newest dump $(basename "$dump") is ${age_days} days old — the nightly backup has stopped"
 fi
-# THE INSTANT THE DUMP IS A PICTURE OF, which is what tells a table created
-# afterwards apart from a table that failed to restore (#279). `raptor-backup.sh`
-# names the file for the moment it started, and pg_dump's snapshot is taken at
-# that moment, so the filename is the honest reading and needs no second source.
-# mtime is the fallback and is the moment it FINISHED — later, so it tolerates
-# strictly less, which is the safe direction to be wrong in.
-if [[ "$(basename "$dump")" =~ ^"$BACKUP_PREFIX"-([0-9]{8})T([0-9]{6})Z\.dump$ ]]; then
-  d="${BASH_REMATCH[1]}"; t="${BASH_REMATCH[2]}"
-  dump_instant="${d:0:4}-${d:4:2}-${d:6:2} ${t:0:2}:${t:2:2}:${t:4:2}+00"
-else
-  dump_instant=$(date -u -r "$(stat -f%m "$dump")" +"%Y-%m-%d %H:%M:%S+00")
-fi
-
 # Which dump is being drilled, and why, when it is not the one a reader would
 # assume (#24). A .part newer than the chosen dump means tonight's backup had
 # not finished, so this drill is answering about yesterday's — worth saying,
@@ -241,7 +220,6 @@ select relname, cnt from (
 SQL
 }
 
-current_partition="stream_message_$(date -u +%Y_%m)"
 restored=$(tally "$DRILL_CONTAINER")
 live=$(tally "$POSTGRES_CONTAINER")
 if [[ -z "$restored" ]]; then
@@ -305,101 +283,54 @@ if [[ -z "$as_of" ]]; then
   finish FAILED "could not count live's ordinary tables up to the dump's last row"
 fi
 
-# Partitions of raw.stream_message that BEGIN at or after the dump instant, plus
-# the DEFAULT partition — the ones whose absence from the restore is drift rather
-# than fault. Read from the live catalogue rather than parsed out of the names:
-# the months V3 made that hold rows sit at 17:00Z, not midnight (V3 rendered
-# date bounds in a UTC+7 session; V37, #26, realigned only the empty ones after
-# them), so a name says the month and not the range.
-#
-# The DEFAULT partition renders as the bare word `DEFAULT`, and `''::timestamptz`
-# is an ERROR rather than a NULL — hence `case`, which provably guards the cast,
-# where an `or` leaves the evaluation order to the planner.
-late_partitions() {
-  docker exec -i "$POSTGRES_CONTAINER" psql -U "$RAPTOR_DB_USER" -d "$RAPTOR_DB_NAME" -At \
-      -v dump="$dump_instant" <<'SQL'
-select c.relname
-from pg_class c
-  join pg_namespace n on n.oid = c.relnamespace
-  join pg_inherits i  on i.inhrelid = c.oid
-  join pg_class p     on p.oid = i.inhparent
-where n.nspname = 'raw' and p.relname = 'stream_message'
-  and case
-        when pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT' then true
-        else (substring(pg_get_expr(c.relpartbound, c.oid)
-                        from 'FROM \(''([^'']+)''\)'))::timestamptz >= :'dump'::timestamptz
-      end
-order by 1;
-SQL
-}
-
 # A table MISSING from the restore is the one fault the row-by-row loop below
 # cannot see, because it iterates over what came back — fewer tables simply
 # means fewer comparisons, all of which pass. Assert the sets match first, or
 # the drill is silent about exactly the failure it exists to catch.
-#
-# The single exception is a partition that did not exist when the dump was taken
-# (#279): #272's extender creates one most days, and the DEFAULT partition
-# arrived with it. Tolerated only while EMPTY in live — a row cannot hide behind
-# a tolerance that requires there to be no rows — and named in the final message
-# either way, because a drill that quietly forgives things teaches nothing.
 missing=$(comm -13 \
   <(printf '%s\n' "$restored" | cut -f1 | sort) \
   <(printf '%s\n' "$live"     | cut -f1 | sort))
-tolerated=""
 if [[ -n "${missing//[[:space:]]/}" ]]; then
-  late=$(late_partitions)
   faults=""
   while IFS= read -r tbl; do
     [[ -z "$tbl" ]] && continue
     live_n=$(printf '%s\n' "$live" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
-    live_n=${live_n:-0}
-    if printf '%s\n' "$late" | grep -qxF "$tbl" && (( live_n == 0 )); then
-      tolerated="$tolerated $tbl"
-    else
-      faults="$faults $tbl(live=$live_n)"
-    fi
+    faults="$faults $tbl(live=${live_n:-0})"
   done <<< "$missing"
-  if [[ -n "$faults" ]]; then
-    finish FAILED "restore is missing table(s) present in live raw:$faults"
-  fi
+  finish FAILED "restore is missing table(s) present in live raw:$faults"
 fi
 
-mismatches=""; checked=0; rows=0; sealed=0; ordinary=0; loose=""
+mismatches=""; checked=0; rows=0; messages=0; ordinary=0; set_aside=0; loose=""
 while IFS=$'\t' read -r tbl n; do
   [[ -z "$tbl" ]] && continue
   live_n=$(printf '%s\n' "$live" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
   live_n=${live_n:-0}
   checked=$((checked + 1)); rows=$((rows + n))
-  # Counted so the exact-match claim can be asserted rather than assumed: the
-  # sealed months ARE the corpus, and a run that compared none of them has not
-  # verified the backup whatever else it did.
-  if [[ "$tbl" =~ ^stream_message_[0-9]{4}_[0-9]{2}$ && "$tbl" != "$current_partition" ]]; then
-    sealed=$((sealed + 1))
-  fi
-  if [[ "$tbl" == "$current_partition" ]]; then
-    # Still being written; only a shrink or an empty restore is a fault.
-    if (( n == 0 )) || (( n > live_n )); then
-      mismatches="$mismatches $tbl(restored=$n live=$live_n, current partition)"
-    fi
-  elif [[ ! "$tbl" =~ ^stream_message_ ]]; then
-    # An ordinary table (#24): exact, but only up to the dump's last row.
-    upto=$(printf '%s\n' "$as_of" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
-    if [[ -n "$upto" ]]; then
-      ordinary=$((ordinary + 1))
-      if (( n != upto )); then
-        mismatches="$mismatches $tbl(restored=$n live=$upto up to the dump's last row)"
-      fi
+  upto=$(printf '%s\n' "$as_of" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
+  if [[ -n "$upto" ]]; then
+    # Keyed (#24): exact, but only up to the dump's last row.
+    if [[ "$tbl" == "stream_message" ]]; then
+      messages=$n
     else
-      # No key known. raw is append-only, so a restore holding MORE than live
-      # still means rows left the system of record; fewer is only drift.
-      loose="$loose $tbl"
-      if (( n > live_n )); then
-        mismatches="$mismatches $tbl(restored=$n live=$live_n)"
-      fi
+      ordinary=$((ordinary + 1))
     fi
-  elif (( n != live_n )); then
-    mismatches="$mismatches $tbl(restored=$n live=$live_n)"
+    if (( n != upto )); then
+      mismatches="$mismatches $tbl(restored=$n live=$upto up to the dump's last row)"
+    fi
+  elif [[ "$tbl" =~ ^stream_message_ ]]; then
+    # A partition of the table V38 set aside (#33): frozen, so exact. Gone
+    # with #35.
+    set_aside=$((set_aside + 1))
+    if (( n != live_n )); then
+      mismatches="$mismatches $tbl(restored=$n live=$live_n)"
+    fi
+  else
+    # No key known. raw is append-only, so a restore holding MORE than live
+    # still means rows left the system of record; fewer is only drift.
+    loose="$loose $tbl"
+    if (( n > live_n )); then
+      mismatches="$mismatches $tbl(restored=$n live=$live_n)"
+    fi
   fi
 done <<< "$restored"
 
@@ -410,10 +341,13 @@ if (( rows == 0 )); then
   finish FAILED "restore produced $checked table(s) but zero rows in total"
 fi
 # The other half of the vacuous-loop guard above. The set check proves nothing
-# is missing; this proves there was something to compare — a restore of an empty
-# partition set would otherwise satisfy every assertion in this script.
-if (( sealed == 0 )); then
-  finish FAILED "restore produced $checked table(s) but no sealed partition of raw.stream_message, so nothing was actually verified"
+# is missing; this proves the corpus itself was compared — a restore whose
+# raw.stream_message is empty, or had no key to compare by, would otherwise
+# satisfy every assertion in this script.
+if (( messages == 0 )); then
+  finish FAILED "restore produced $checked table(s) but compared no rows of raw.stream_message, so nothing was actually verified"
 fi
 
-finish OK "restored $(basename "$dump")$dump_note into a throwaway server: $checked raw table(s), $rows rows, $sealed sealed partition(s) match live, $ordinary ordinary table(s) match live up to the dump's last row${loose:+; no key known, so only restored <= live:$loose}${tolerated:+; absent from the dump and empty in live, so tolerated:$tolerated}"
+set_aside_note=""
+(( set_aside > 0 )) && set_aside_note="; $set_aside partition(s) of the set-aside table match live exactly"
+finish OK "restored $(basename "$dump")$dump_note into a throwaway server: $checked raw table(s), $rows rows; raw.stream_message's $messages row(s) and $ordinary other table(s) match live up to the dump's last row$set_aside_note${loose:+; no key known, so only restored <= live:$loose}"

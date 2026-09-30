@@ -19,10 +19,14 @@
 # would test the stub. HOME is redirected too, so the state file lands in the
 # case's own temp directory and one case cannot see another's de-dupe.
 #
-# WHAT THE STUB SERVES. Three fixtures, which are the three questions the script
-# asks a database: the restored tally, the live tally, and which partitions the
-# live catalogue says begin at or after the dump instant. The psql calls are
-# told apart by their SQL, which is how a real one differs too.
+# WHAT THE STUB SERVES. Four fixtures, which are the four questions the script
+# asks a database: the restored tally, the live tally, the restored server's
+# highest key per table, and live's count up to it. The psql calls are told
+# apart by their SQL, which is how a real one differs too.
+#
+# SINCE #34 there are no monthly partitions to derive: `raw.stream_message` is a
+# plain table compared by `id` like any other (#33). The only partitions left
+# are those of the set-aside `stream_message_partitioned`, until #35.
 set -uo pipefail
 # No operator config may leak into a test: every setting comes from the case.
 # That means the ENVIRONMENT as well as ops.env — the environment beats the file
@@ -40,12 +44,9 @@ passed=0; failed=0
 fail() { echo "  FAIL: $1"; failed=$(( failed + 1 )); }
 pass() { passed=$(( passed + 1 )); }
 
-# Months, derived rather than written down: a fixture with a hardcoded month
-# becomes a test about the calendar the day the current partition catches up.
-cur="stream_message_$(date -u +%Y_%m)"
-m1="stream_message_$(date -u -v-1m +%Y_%m)"
-m2="stream_message_$(date -u -v-2m +%Y_%m)"
-future="stream_message_$(date -u -v+11m +%Y_%m)"
+# Two partitions of the set-aside table, as a restore before #35 still holds them.
+p1="stream_message_2026_08"
+p2="stream_message_default"
 
 # --- the harness ------------------------------------------------------------
 setup() {
@@ -55,11 +56,13 @@ setup() {
   dump="$work/backups/raptor-raw-$(date -u +%Y%m%dT%H%M%S)Z.dump"
   printf 'not really a dump\n' > "$dump"
   : > "$work/sent.log"
-  # Every real restore has keyed ordinary tables (#24), and the drill now goes
-  # red when it cannot read them, so a case that is not about them still needs
-  # one. Absent from the tallies, it is never compared.
-  printf 'spill_file\tid\t1\n' > "$work/restored.keys"
-  printf 'spill_file\t1\n' > "$work/live.asof"
+  # The corpus as every case starts: raw.stream_message restored up to id 300,
+  # live 45 rows further on, and 300 of live's rows at or below that id. A case
+  # about something else overwrites only what it is about.
+  printf 'stream_message\t300\ncapture_file\t7\n' > "$work/restored.tally"
+  printf 'stream_message\t345\ncapture_file\t7\n' > "$work/live.tally"
+  printf 'stream_message\tid\t300\n' > "$work/restored.keys"
+  printf 'stream_message\t300\n' > "$work/live.asof"
 
   cat > "$work/bin/curl" <<'STUB'
 #!/bin/bash
@@ -69,9 +72,8 @@ printf '%s\n' "$data" >> "$WORK/sent.log"
 exit 0
 STUB
 
-  # docker: every call the drill makes, answered from the fixtures. The two
-  # psql queries are distinguished the way they differ for real — one reads
-  # pg_class.relpartbound, the other counts rows.
+  # docker: every call the drill makes, answered from the fixtures, told apart
+  # by their SQL the way they differ for real.
   cat > "$work/bin/docker" <<'STUB'
 #!/bin/bash
 case "${1:-}" in
@@ -95,11 +97,10 @@ case "$prog" in
     exit 0 ;;
   psql)
     sql=$(cat)
-    if [[ "$sql" == *relpartbound* ]]; then cat "$WORK/late.list"
     # #24: the restored server's highest key per ordinary table, and live's count
     # up to it. The live query is kept so a case can assert the cutoff it was
     # given came from the restore, not from somewhere the stub made up.
-    elif [[ "$sql" == *"restore keys"* ]]; then cat "$WORK/restored.keys" 2>/dev/null
+    if [[ "$sql" == *"restore keys"* ]]; then cat "$WORK/restored.keys" 2>/dev/null
     elif [[ "$sql" == *"as of the dump"* ]]; then
       printf '%s\n' "$sql" > "$WORK/asof.sql"; cat "$WORK/live.asof" 2>/dev/null
     elif [[ "$container" == "drill" ]]; then cat "$WORK/restored.tally"
@@ -136,118 +137,87 @@ expect_says() { # $1 = output  $2 = substring  $3 = label
 
 echo "restore drill tests"
 
-# --- 1: a clean restore passes, and says what it compared -------------------
-# The baseline every other case is a variation on: two sealed months, the
-# current one still being written and legitimately behind live.
+# --- 1: a clean restore of the plain table passes, and says what it compared
+# The baseline: raw.stream_message behind live by a day's capture, no partition
+# anywhere, which is what every drill after #35 looks like. It must be OK, not
+# "no sealed partition" — that verdict was the drill before #34.
 setup
-printf '%s\t100\n%s\t200\n%s\t30\ncapture_file\t7\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\ncapture_file\t7\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
 out=$(run)
 expect_status "$out" OK
-expect_says "$out" "2 sealed partition(s) match live" "baseline"
+expect_says "$out" "raw.stream_message's 300 row(s)" "plain table"
+expect_says "$(cat "$work/asof.sql" 2>/dev/null)" "count(*) from raw.stream_message where id <= '300'" "cutoff from restore"
+if printf '%s' "$out" | grep -qi "partition"; then fail "a restore with no partitions mentions them: $out"; else pass; fi
 teardown
 
-# --- 2: #279 — partitions created after the dump are drift, not fault -------
-# The regression. Live has three tables the dump cannot have: two monthly
-# partitions the extender made and the DEFAULT partition V28 added. All empty.
-# Before the fix this aborted with "restore is missing table(s)" having compared
-# nothing; the assertion that matters is not just OK but that the sealed
-# partitions were reached.
+# --- 2: a message live has BEHIND the dump's last id is a lost message ------
 setup
-printf '%s\t100\n%s\t200\n%s\t30\ncapture_file\t7\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\ncapture_file\t7\n%s\t0\nstream_message_default\t0\n' \
-  "$m2" "$m1" "$cur" "$future" > "$work/live.tally"
-printf '%s\nstream_message_default\n' "$future" > "$work/late.list"
+printf 'stream_message\t301\n' > "$work/live.asof"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "stream_message(restored=300 live=301 up to the dump's last row)" "lost message"
+teardown
+
+# --- 3: a restore that holds no messages has verified nothing ---------------
+# Every other assertion passes here — the sets match and no keyed count differs
+# — and the backup still holds none of the corpus.
+setup
+printf 'stream_message\t0\ncapture_file\t7\n' > "$work/restored.tally"
+printf 'spill_file\tid\t1\n' > "$work/restored.keys"
+printf 'spill_file\t1\n' > "$work/live.asof"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "compared no rows of raw.stream_message" "empty corpus"
+teardown
+
+# --- 4: a missing table aborts ----------------------------------------------
+# The row loop iterates over what came back, so this is the one fault it
+# cannot see.
+setup
+printf 'stream_message\t300\n' > "$work/restored.tally"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "missing table(s)" "missing table"
+expect_says "$out" "capture_file(live=7)" "missing table"
+teardown
+
+# --- 5: ...even an EMPTY one, now that nothing creates tables on a timer ------
+# Until #34 an empty partition created after the dump was tolerated (#279).
+# Nothing creates one any more, so the tolerance went with the extender.
+setup
+printf 'stream_message\t345\ncapture_file\t7\nstream_message_2027_01\t0\n' > "$work/live.tally"
+out=$(run)
+expect_status "$out" FAILED
+expect_says "$out" "stream_message_2027_01(live=0)" "empty table missing"
+teardown
+
+# --- 6: the set-aside table's partitions must match exactly (until #35) -----
+setup
+printf 'stream_message\t300\ncapture_file\t7\n%s\t100\n%s\t0\n' "$p1" "$p2" > "$work/restored.tally"
+printf 'stream_message\t345\ncapture_file\t7\n%s\t100\n%s\t0\n' "$p1" "$p2" > "$work/live.tally"
 out=$(run)
 expect_status "$out" OK
-expect_says "$out" "2 sealed partition(s) match live" "post-dump partitions"
-expect_says "$out" "tolerated: $future stream_message_default" "post-dump partitions"
-if [[ -s "$work/sent.log" ]]; then fail "tolerated drift alerted: $(cat "$work/sent.log")"; else pass; fi
+expect_says "$out" "2 partition(s) of the set-aside table match live exactly" "set-aside"
 teardown
 
-# --- 3: a missing table that is NOT a post-dump partition still aborts ------
-# The witness argument the original comment makes, kept intact: the row loop
-# iterates over what came back, so this is the one fault it cannot see.
 setup
-printf '%s\t100\n%s\t200\n%s\t30\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\ncapture_file\t7\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
+printf 'stream_message\t300\ncapture_file\t7\n%s\t99\n' "$p1" > "$work/restored.tally"
+printf 'stream_message\t345\ncapture_file\t7\n%s\t100\n' "$p1" > "$work/live.tally"
 out=$(run)
 expect_status "$out" FAILED
-expect_says "$out" "missing table(s)" "missing non-partition"
-expect_says "$out" "capture_file(live=7)" "missing non-partition"
+expect_says "$out" "$p1(restored=99 live=100)" "set-aside mismatch"
 teardown
 
-# --- 4: a post-dump partition with ROWS in live is a fault ------------------
-# The tolerance is "empty in live" precisely so that no row can hide behind it.
-# A partition the dump missed that has since been written to means the dump is
-# older than the script believes, and that is worth stopping for.
+# --- 7: --scheduled on another day, last verdict OK, does nothing -----------
 setup
-printf '%s\t100\n%s\t200\n%s\t30\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\n%s\t9\n' "$m2" "$m1" "$cur" "$future" > "$work/live.tally"
-printf '%s\n' "$future" > "$work/late.list"
-out=$(run)
-expect_status "$out" FAILED
-expect_says "$out" "$future(live=9)" "non-empty post-dump partition"
-teardown
-
-# --- 5: the real fault is found THROUGH the tolerated drift -----------------
-# The whole point of #279: a sealed month that does not match must still be
-# caught on a day when the extender has also just created a partition. This is
-# the case the week of red could not have reported.
-setup
-printf '%s\t99\n%s\t200\n%s\t30\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\n%s\t0\n' "$m2" "$m1" "$cur" "$future" > "$work/live.tally"
-printf '%s\n' "$future" > "$work/late.list"
-out=$(run)
-expect_status "$out" FAILED
-expect_says "$out" "$m2(restored=99 live=100)" "sealed mismatch behind drift"
-teardown
-
-# --- 6: a restore with no sealed partition has verified nothing -------------
-# The other half of the vacuous-loop guard. Every assertion in the script passes
-# here — the sets match, no count differs, rows are non-zero — and the backup
-# still holds none of the corpus.
-setup
-printf '%s\t30\ncapture_file\t7\n' "$cur" > "$work/restored.tally"
-printf '%s\t45\ncapture_file\t7\n' "$cur" > "$work/live.tally"
-: > "$work/late.list"
-out=$(run)
-expect_status "$out" FAILED
-expect_says "$out" "no sealed partition" "vacuous restore"
-teardown
-
-# --- 7: a restore that shrank the current partition to empty is a fault -----
-# Unchanged behaviour, asserted because case 1 depends on the current partition
-# being allowed to differ and that must not become "allowed to be anything".
-setup
-printf '%s\t100\n%s\t200\n%s\t0\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
-out=$(run)
-expect_status "$out" FAILED
-expect_says "$out" "current partition" "empty current partition"
-teardown
-
-# --- 8: --scheduled on another day, last verdict OK, does nothing -----------
-setup
-printf '%s\t100\n%s\t200\n%s\t30\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
 printf 'OK' > "$work/home/.raptor/restore-drill.state"
 out=$(WEEKLY_DAY=$(( $(date +%u) % 7 + 1 )) run --scheduled)
 expect_status "$out" SKIP
 if [[ -s "$work/sent.log" ]]; then fail "a skipped run alerted"; else pass; fi
 teardown
 
-# --- 9: --scheduled on another day RETRIES while the last verdict is red ----
-# The half of #279 that is about the seven days, not the comparison: a red
-# drill re-answers tomorrow. And because it recovers, it says so.
+# --- 8: --scheduled on another day RETRIES while the last verdict is red ----
+# A red drill re-answers tomorrow (#279). And because it recovers, it says so.
 setup
-printf '%s\t100\n%s\t200\n%s\t30\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
 printf 'FAILED' > "$work/home/.raptor/restore-drill.state"
 out=$(WEEKLY_DAY=$(( $(date +%u) % 7 + 1 )) run --scheduled)
 expect_status "$out" OK
@@ -255,103 +225,61 @@ grep -q "recovered" "$work/sent.log" || fail "recovery was not announced"
 grep -q "recovered" "$work/sent.log" && pass
 teardown
 
-# --- 10: a hand-run is never skipped ----------------------------------------
-# No argument means a person typed it, and a person typing it means run.
+# --- 9: a hand-run is never skipped -----------------------------------------
 setup
-printf '%s\t100\n%s\t200\n%s\t30\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
 printf 'OK' > "$work/home/.raptor/restore-drill.state"
 out=$(WEEKLY_DAY=$(( $(date +%u) % 7 + 1 )) run)
 expect_status "$out" OK
 teardown
 
-# --- 11: a failed pg_restore is still a failed drill ------------------------
+# --- 10: a failed pg_restore is still a failed drill ------------------------
 setup
-printf '%s\t100\n' "$m1" > "$work/restored.tally"
-printf '%s\t100\n' "$m1" > "$work/live.tally"
-: > "$work/late.list"
 : > "$work/restore-fails"
 out=$(run)
 expect_status "$out" FAILED
 expect_says "$out" "pg_restore of" "failed restore"
 teardown
 
-# --- 12: #24 — rows written to an ordinary table after the dump are drift ---
-# The regression, shaped like 2026-09-27: the backup ran long, the drill fired
-# while it was still a .part, and drilled the day-old dump instead. A day of
-# capture had added sessions and scope rows since. Before the fix every
-# ordinary raw table was compared exactly, so this reported FAILED about a
-# backup that was fine. Counted up to the dump's own highest key, live agrees.
+# --- 11: #24 — rows written to ordinary tables after the dump are drift -----
+# Shaped like 2026-09-27: the backup ran long, the drill fired while it was
+# still a .part, and drilled the day-old dump. Counted up to the dump's own
+# highest key, live agrees.
 setup
-printf '%s\t100\n%s\t200\n%s\t30\ncapture_session\t134\nmarket_scope\t2830\n' \
-  "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\ncapture_session\t137\nmarket_scope\t2846\n' \
-  "$m2" "$m1" "$cur" > "$work/live.tally"
-printf 'capture_session\tid\t134\nmarket_scope\tfirst_seen_at\t2026-01-02 03:04:05.678+00\n' \
+printf 'stream_message\t300\ncapture_session\t134\nmarket_scope\t2830\n' > "$work/restored.tally"
+printf 'stream_message\t345\ncapture_session\t137\nmarket_scope\t2846\n' > "$work/live.tally"
+printf 'stream_message\tid\t300\ncapture_session\tid\t134\nmarket_scope\tfirst_seen_at\t2026-01-02 03:04:05.678+00\n' \
   > "$work/restored.keys"
-printf 'capture_session\t134\nmarket_scope\t2830\n' > "$work/live.asof"
-: > "$work/late.list"
-# A newer backup, still being written: the .part the real backup renames later.
+printf 'stream_message\t300\ncapture_session\t134\nmarket_scope\t2830\n' > "$work/live.asof"
 touch -t 209912310000 "$work/backups/raptor-raw-20991231T000000Z.dump.part"
 out=$(run)
 expect_status "$out" OK
-expect_says "$out" "2 ordinary table(s) match live up to the dump's last row" "post-dump rows"
+expect_says "$out" "2 other table(s) match live up to the dump's last row" "post-dump rows"
 expect_says "$out" "a newer backup was still being written" "stale dump named"
-# The cutoff live was asked about must be the one the RESTORE reported — a
-# canned answer from the stub proves nothing about the predicate otherwise.
 expect_says "$(cat "$work/asof.sql" 2>/dev/null)" "id <= '134'" "cutoff from restore"
 expect_says "$(cat "$work/asof.sql" 2>/dev/null)" "first_seen_at <= '2026-01-02 03:04:05.678+00'" "cutoff from restore"
 teardown
 
-# --- 13: a row live has BEHIND the dump's last key is a real fault ----------
-# The tolerance must not swallow the thing it exists beside: a row older than
-# the newest one the dump holds, that the dump does not hold, is a lost row.
+# --- 12: a table with no key known is compared loosely, and says so ---------
 setup
-printf '%s\t100\n%s\t200\n%s\t30\ncapture_session\t134\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\ncapture_session\t137\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-printf 'capture_session\tid\t134\n' > "$work/restored.keys"
-printf 'capture_session\t135\n' > "$work/live.asof"
-: > "$work/late.list"
-out=$(run)
-expect_status "$out" FAILED
-expect_says "$out" "capture_session(restored=134 live=135 up to the dump's last row)" "row behind the cutoff"
-teardown
-
-# --- 14: a table with no key known is compared loosely, and says so ---------
-# A future table with no `id` is not a reason to go red, and not a reason to go
-# quiet either: restored must not exceed live, and the verdict names it.
-setup
-printf '%s\t100\n%s\t200\n%s\t30\nsome_new_table\t5\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\nsome_new_table\t8\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
+printf 'stream_message\t300\nsome_new_table\t5\n' > "$work/restored.tally"
+printf 'stream_message\t345\nsome_new_table\t8\n' > "$work/live.tally"
 out=$(run)
 expect_status "$out" OK
 expect_says "$out" "no key known, so only restored <= live: some_new_table" "unkeyed table"
 teardown
 
-# --- 15: ...but even loosely, a restore that holds MORE than live is a fault
-# raw is append-only, so live having fewer rows than a backup of it means rows
-# left the system of record.
+# --- 13: ...but even loosely, a restore that holds MORE than live is a fault
 setup
-printf '%s\t100\n%s\t200\n%s\t30\nsome_new_table\t9\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\nsome_new_table\t8\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-: > "$work/late.list"
+printf 'stream_message\t300\nsome_new_table\t9\n' > "$work/restored.tally"
+printf 'stream_message\t345\nsome_new_table\t8\n' > "$work/live.tally"
 out=$(run)
 expect_status "$out" FAILED
 expect_says "$out" "some_new_table(restored=9 live=8)" "unkeyed table shrank"
 teardown
 
-# --- 16: a failed live count does not demote every table to loose -----------
-# Without the guard, an empty answer from live would leave every ordinary table
-# with no cutoff, the loop would compare them all loosely, and the drill would
-# say OK having checked less than it claims.
+# --- 14: a failed live count does not demote every table to loose -----------
 setup
-printf '%s\t100\n%s\t200\n%s\t30\ncapture_session\t134\n' "$m2" "$m1" "$cur" > "$work/restored.tally"
-printf '%s\t100\n%s\t200\n%s\t45\ncapture_session\t137\n' "$m2" "$m1" "$cur" > "$work/live.tally"
-printf 'capture_session\tid\t134\n' > "$work/restored.keys"
 : > "$work/live.asof"
-: > "$work/late.list"
 out=$(run)
 expect_status "$out" FAILED
 expect_says "$out" "could not count live's ordinary tables" "failed live count"

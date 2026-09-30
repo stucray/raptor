@@ -396,5 +396,18 @@ done
 expect_status "$out" NOT-CAPTURING
 teardown
 
+# --- 24: a partition runway on the wire is no longer read (#34) --------------
+# raw.stream_message stopped being partitioned in #33 and the app stopped
+# publishing `partitionRunway`; every payload above already omits it. This one
+# carries an old backend's `low: true` with three days left, which used to be
+# LOW-PARTITION-RUNWAY. It must now be silent: nothing is left to run out.
+setup "$(capture_json 3600 UP 2026-09-07T23:31:21Z COMPLETED COMPLETED \
+  | jq -c '.components.partitionRunway = {"status":"UP","details":{"low":true,"daysRemaining":3}}')"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 0 "partition runway"
+if printf '%s' "$out" | grep -q "RUNWAY"; then fail "runway still reported: $out"; else pass; fi
+teardown
+
 echo "  $passed passed, $failed failed"
 exit $(( failed > 0 ? 1 : 0 ))

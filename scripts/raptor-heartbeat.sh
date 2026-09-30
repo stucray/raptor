@@ -44,12 +44,6 @@
 #   frames        — RECORDING with markets subscribed and nothing framed for
 #                   FRAME_STALE_S → NO-FRAMES. StreamWatchdog sees this at 10s
 #                   from inside; this is the copy that survives the process.
-#   runway        — the app reports `raw.stream_message` running out of monthly
-#                   partitions → LOW-PARTITION-RUNWAY (#267). Not urgent and
-#                   never at night: it asks for a schema change, and when the
-#                   partitions do run out the writes fail AND the spill drain
-#                   wedges. Ungated by scope on purpose — the deadline does not
-#                   care whether there is a card on.
 #   close-out    — no close-out FINISHED in STALE_CLOSE_OUT_S → STALE-CLOSE-OUT
 #                   (#201, narrowed by #316). The nightly run only fetches the
 #                   football archive into raw since #316 — projecting query is
@@ -385,36 +379,6 @@ if [[ -n "$capture_body" ]] && printf '%s' "$capture_body" | jq -e . >/dev/null 
   #
   # `CaptureHealthGroupTest` asserts `analysis` is absent from the group, which
   # is what stops the field this used to read from quietly reappearing.
-
-  # THE PARTITION RUNWAY (#267). `raw.stream_message` is range-partitioned by
-  # month and its partitions were created once, by a migration that computed
-  # twelve months from the date it ran. When they end, every write to the system
-  # of record fails — and the failure wedges the spill drain, because a rejected
-  # row spills and then fails identically on every replay, forever.
-  #
-  # Read as a FLAG the app already computed, never re-derived here: the threshold
-  # lives in `raptor.raw-store.partition-runway-warning` and a second copy of
-  # the rule out here is the #179 drift. Absent means silence, deliberately: a
-  # backend older than this publishes no such contributor, and alerting through a
-  # deploy skew is how a channel stops being read.
-  #
-  # Its own word, because the response is unlike every other status here. Nothing
-  # about it is urgent tonight and nothing can be done at 22:00 on a Saturday; it
-  # asks for a schema change on a weekday. A word that read like a capture failure
-  # would teach the operator to read a capture failure as this.
-  runway_low=$(printf '%s' "$capture_body" \
-      | jq -r '.components.partitionRunway.details.low // empty')
-  # NOT `// empty`, which collapses a legitimate 0 the way it collapses absent —
-  # jq's alternative operator treats `false` and `0`-as-null alike. Zero days is
-  # exactly when this message must not read "? day(s) left".
-  runway_days=$(printf '%s' "$capture_body" \
-      | jq -r '.components.partitionRunway.details.daysRemaining
-               | if . == null then empty else tostring end')
-  if [[ "$runway_low" == "true" ]]; then
-    add_status "LOW-PARTITION-RUNWAY"
-    add_detail "raw.stream_message has ${runway_days:-?} day(s) of partitions left; \
-writes fail when they run out (#267) - this needs a schema change, not a restart"
-  fi
 elif [[ "$live" == "UP" ]]; then
   # Root health UP while the capture group is unreadable is its own finding: the
   # group is what the recorder reports through, so losing it loses the signal
