@@ -195,9 +195,18 @@ class CaptureLedgerWriter {
 	 * to use it.
 	 *
 	 * <p>The floor comes from {@code first_seen_at}, which is {@code not null}, so
-	 * it needs no fallback. The {@code session_id is not null} guard stays — it
-	 * excludes the historic corpus, which shares the id space and is not what
-	 * scope counts.
+	 * it needs no fallback.
+	 *
+	 * <p><b>Counted over the sessions that ran while the market was in scope</b>
+	 * (raptor#32), not over every session row carrying its id: a session whose span
+	 * overlaps the market's, from {@code first_seen_at} to the {@code
+	 * state_changed_at} that took it to {@code DONE}, or open-ended if it has not
+	 * left. It is the question scope actually asks — what did the recorder get while
+	 * it was meant to be recording this market — and it reaches the rows through the
+	 * session, the key capture writes by, rather than through a market index. Each
+	 * message has one session and each market one scope row, so no row is counted
+	 * twice. On 2026-09-30 it agreed with the per-market count it replaced for all
+	 * 2,866 scoped markets: 2,762 equal, 104 with nothing under either.
 	 */
 	private static final String PROJECT_SCOPE_SQL = """
 			insert into ledger.market_scope (
@@ -211,13 +220,27 @@ class CaptureLedgerWriter {
 				coalesce(m.messages, 0), :ledgerRunId
 			from raw.market_scope s
 			left join (
-				select market_id, count(*) as messages
-				from raw.stream_message
-				where market_id in (:marketIds)
-					and session_id is not null
-					-- Not redundant with the index; see this constant's javadoc.
-					and pt >= :ptFloor
-				group by market_id
+				select w.market_id, count(*) as messages
+				from (
+					select sc.market_id, cs.id as session_id
+					from raw.market_scope sc
+					join raw.capture_session cs
+						on cs.started_at <= case when sc.state = 'DONE' then sc.state_changed_at
+								else cast('infinity' as timestamptz) end
+						and coalesce(cs.ended_at, cast('infinity' as timestamptz))
+							>= sc.first_seen_at
+					where sc.market_id in (:marketIds)
+				) w
+				join raw.stream_message r
+					on r.session_id = w.session_id and r.market_id = w.market_id
+				-- Both redundant with the join and neither removable. The market list
+				-- lets the planner filter the scan itself: 339ms without it, 220ms
+				-- with, against 189ms for the query this replaced (2026-09-30, 36
+				-- markets of one weekend, median of five). The floor prunes partitions;
+				-- see this constant's javadoc.
+				where r.market_id in (:marketIds)
+					and r.pt >= :ptFloor
+				group by w.market_id
 			) m on m.market_id = s.market_id
 			where s.market_id in (:marketIds)""";
 
