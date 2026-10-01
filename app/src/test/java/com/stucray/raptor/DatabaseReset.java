@@ -44,8 +44,7 @@ import org.springframework.test.context.TestExecutionListener;
  *
  * <p>The table list is read from the catalogue on each call rather than written
  * down, so a table added by a future migration is covered without anyone
- * remembering to add it here. Partitions are excluded because truncating the
- * partitioned parent takes them with it.
+ * remembering to add it here.
  */
 public class DatabaseReset implements TestExecutionListener {
 
@@ -59,8 +58,7 @@ public class DatabaseReset implements TestExecutionListener {
 			select string_agg(format('%I.%I', n.nspname, c.relname), ', ')
 			from pg_class c
 			join pg_namespace n on n.oid = c.relnamespace
-			where c.relkind in ('r', 'p')
-			  and not c.relispartition
+			where c.relkind = 'r'
 			  and n.nspname in ('raw', 'query', 'ledger', 'batch', 'public')
 			  and c.relname not like 'flyway_schema_history%'""";
 

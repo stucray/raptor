@@ -1,15 +1,9 @@
 package com.stucray.raptor.rawstore;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.stucray.raptor.TestcontainersConfiguration;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -27,7 +21,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * V38 (#33): a partitioned {@code raw.stream_message} holding rows of every
- * provenance becomes one plain table, with every row in it exactly once.
+ * provenance becomes one plain table, with every row in it exactly once. Then
+ * V39 (#35) drops the partitioned table V38 set aside.
  *
  * <p><b>Each test gets its own database</b> in the shared container, migrated
  * by Flyway exactly as {@code AcquisitionMigrations} does it. The test context's
@@ -41,7 +36,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * 2019 and 2020, a spill-replayed message, a row in the DEFAULT partition, and
  * the V36 envelope fields.
  */
-@DisplayName("V38: raw.stream_message becomes a plain table and every row survives")
+@DisplayName("V38/V39: raw.stream_message becomes a plain table and every row survives")
 class PlainStreamMessageMigrationTest {
 
 	private static final PostgreSQLContainer POSTGRES = TestcontainersConfiguration.POSTGRES;
@@ -202,7 +197,7 @@ class PlainStreamMessageMigrationTest {
 			flyway(fresh, null).migrate();
 			flyway(migrated, "37").migrate();
 			seed();
-			flyway(migrated, "38").migrate();
+			flyway(migrated, null).migrate();
 
 			List<String> freshShape = JdbcClient.create(dataSource(fresh)).sql(SHAPE_SQL)
 					.query(String.class).list();
@@ -231,47 +226,65 @@ class PlainStreamMessageMigrationTest {
 	}
 
 	/**
-	 * The written reversal puts the partitioned table back with every row,
-	 * including one captured after V38, and V38 then applies again cleanly.
+	 * V39 (#35) drops the set-aside table with every partition, and only that: a
+	 * row captured after V38 has an id above the copy's and must not trip the
+	 * comparison, and the plain table keeps every row.
 	 */
 	@Test
-	@DisplayName("the written reversal restores the partitioned table, and V38 re-applies")
-	void theReversalRestoresThePartitionedTable() throws Exception {
+	@DisplayName("V39 drops the set-aside table and every partition, and nothing else")
+	void v39DropsTheSetAsideTable() {
 		flyway(migrated, "37").migrate();
 		seed();
 		flyway(migrated, "38").migrate();
-		long session = session(null, "RESIDENT");
-		probe.sql("""
-				insert into raw.stream_message (session_id, market_id, pt, received_at, seq, payload)
-				values (?, '1.50', '2026-09-30 19:00:00+00', '2026-09-30 19:00:01+00', 1, '{"id":"1.50"}')""")
-			.param(session).update();
+		message(session(null, "RESIDENT"), null, "1.50", "2026-09-30 19:00:00+00", 1, null, null);
 		List<String> rows = rows("raw.stream_message");
+		List<String> shape = probe.sql(SHAPE_SQL).query(String.class).list();
+		// The witness: the set-aside table and its DEFAULT partition are there to drop.
+		assertThat(partitions("raw.stream_message_partitioned")).isGreaterThanOrEqualTo(4);
+		assertThat(setAsideRelations()).contains("stream_message_partitioned", "stream_message_default");
 
-		execute(Files.readString(
-				Path.of("..", "scripts", "rollback", "V38__stream_message_plain_table.sql"),
-				StandardCharsets.UTF_8));
+		flyway(migrated, "39").migrate();
 
-		assertThat(relkind("raw.stream_message")).isEqualTo("p");
+		assertThat(setAsideRelations()).isEmpty();
 		assertThat(rows("raw.stream_message")).containsExactlyInAnyOrderElementsOf(rows);
-		assertThat(probe.sql("""
-						select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-						where n.nspname = 'raw'
-							and c.relname in ('stream_message_partitioned', 'stream_message_v38')""")
-				.query(Long.class).single()).isZero();
-		assertThat(probe.sql("""
-						select indexrelid::regclass::text from pg_index
-						where indrelid = 'raw.stream_message'::regclass""")
-				.query(String.class).list())
-			.containsExactlyInAnyOrder("raw.stream_message_file_seq_idx",
-					"raw.stream_message_market_pt_idx");
-		assertThat(probe.sql("""
-						select max(version::int) from query.flyway_schema_history_acquisition""")
-				.query(Integer.class).single()).isEqualTo(37);
+		assertThat(probe.sql(SHAPE_SQL).query(String.class).list()).containsExactlyElementsOf(shape);
+	}
 
+	/**
+	 * The drop is the last moment the two tables can be compared, so V39 refuses
+	 * to drop a row the plain table does not also hold, and drops nothing.
+	 *
+	 * <p>The row removed is the LAST one V38 copied (the imported session sorts
+	 * after the resident one), so no cut-off by id can step around it.
+	 */
+	@Test
+	@DisplayName("V39 refuses to drop a row the plain table does not hold")
+	void v39RefusesWhenARowWouldBeLost() {
+		flyway(migrated, "37").migrate();
+		seed();
 		flyway(migrated, "38").migrate();
+		long partitions = partitions("raw.stream_message_partitioned");
+		assertThat(probe.sql("select max(id) from raw.stream_message where market_id = '1.21'")
+				.query(Long.class).single()).isEqualTo(probe.sql("select max(id) from raw.stream_message")
+						.query(Long.class).single());
+		assertThat(probe.sql("delete from raw.stream_message where market_id = '1.21'").update()).isOne();
 
-		assertThat(relkind("raw.stream_message")).isEqualTo("r");
-		assertThat(rows("raw.stream_message")).containsExactlyInAnyOrderElementsOf(rows);
+		assertThatThrownBy(() -> flyway(migrated, "39").migrate())
+			.hasMessageContaining("V39: 1 row(s) of the set-aside table are not in raw.stream_message")
+			.hasMessageContaining("(1 from capture sessions, 0 from vendor files)");
+
+		assertThat(partitions("raw.stream_message_partitioned")).isEqualTo(partitions);
+		assertThat(probe.sql("select max(version::int) from query.flyway_schema_history_acquisition where success")
+				.query(Integer.class).single()).isEqualTo(38);
+	}
+
+	/** Every relation in {@code raw} left from the partitioned table: itself and its partitions. */
+	private List<String> setAsideRelations() {
+		return probe.sql("""
+						select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+						where n.nspname = 'raw' and c.relkind in ('r', 'p')
+							and c.relname like 'stream\\_message\\_%'""")
+			.query(String.class).list();
 	}
 
 	/** The fixture, written into whichever table is called raw.stream_message. */
@@ -356,14 +369,6 @@ class PlainStreamMessageMigrationTest {
 						select string_agg(x::text, ',' order by x::text)
 						from pg_class c, unnest(c.relacl) x where c.oid = cast(? as regclass)""")
 			.param(table).query(String.class).single();
-	}
-
-	/** A script as psql would run it: several statements, its own transaction. */
-	private void execute(String script) throws SQLException {
-		try (Connection connection = dataSource(migrated).getConnection();
-				Statement statement = connection.createStatement()) {
-			statement.execute(script);
-		}
 	}
 
 	/** Configured as {@code AcquisitionMigrations} configures it. */
