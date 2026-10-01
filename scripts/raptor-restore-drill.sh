@@ -31,9 +31,6 @@
 # dump's filename is the host's, and the VM's can wake an hour behind. A table
 # with no known key is held only to restored <= live, and named.
 #
-# UNTIL #35: `raw.stream_message_partitioned`, the table V38 set aside, still
-# has its partitions. Nothing writes them, so each must match live exactly.
-#
 # The table SET must match too, with no exceptions. Until #33 a partition
 # created after the dump was legitimately absent from it (#279) and was
 # tolerated; nothing creates tables on a timer any more, so a live table the
@@ -300,7 +297,7 @@ if [[ -n "${missing//[[:space:]]/}" ]]; then
   finish FAILED "restore is missing table(s) present in live raw:$faults"
 fi
 
-mismatches=""; checked=0; rows=0; messages=0; ordinary=0; set_aside=0; loose=""
+mismatches=""; checked=0; rows=0; messages=0; ordinary=0; loose=""
 while IFS=$'\t' read -r tbl n; do
   [[ -z "$tbl" ]] && continue
   live_n=$(printf '%s\n' "$live" | awk -F'\t' -v t="$tbl" '$1==t {print $2}')
@@ -316,13 +313,6 @@ while IFS=$'\t' read -r tbl n; do
     fi
     if (( n != upto )); then
       mismatches="$mismatches $tbl(restored=$n live=$upto up to the dump's last row)"
-    fi
-  elif [[ "$tbl" =~ ^stream_message_ ]]; then
-    # A partition of the table V38 set aside (#33): frozen, so exact. Gone
-    # with #35.
-    set_aside=$((set_aside + 1))
-    if (( n != live_n )); then
-      mismatches="$mismatches $tbl(restored=$n live=$live_n)"
     fi
   else
     # No key known. raw is append-only, so a restore holding MORE than live
@@ -348,6 +338,4 @@ if (( messages == 0 )); then
   finish FAILED "restore produced $checked table(s) but compared no rows of raw.stream_message, so nothing was actually verified"
 fi
 
-set_aside_note=""
-(( set_aside > 0 )) && set_aside_note="; $set_aside partition(s) of the set-aside table match live exactly"
-finish OK "restored $(basename "$dump")$dump_note into a throwaway server: $checked raw table(s), $rows rows; raw.stream_message's $messages row(s) and $ordinary other table(s) match live up to the dump's last row$set_aside_note${loose:+; no key known, so only restored <= live:$loose}"
+finish OK "restored $(basename "$dump")$dump_note into a throwaway server: $checked raw table(s), $rows rows; raw.stream_message's $messages row(s) and $ordinary other table(s) match live up to the dump's last row${loose:+; no key known, so only restored <= live:$loose}"

@@ -25,8 +25,8 @@
 # apart by their SQL, which is how a real one differs too.
 #
 # SINCE #34 there are no monthly partitions to derive: `raw.stream_message` is a
-# plain table compared by `id` like any other (#33). The only partitions left
-# are those of the set-aside `stream_message_partitioned`, until #35.
+# plain table compared by `id` like any other (#33). Since #35 there are no
+# partitions at all.
 set -uo pipefail
 # No operator config may leak into a test: every setting comes from the case.
 # That means the ENVIRONMENT as well as ops.env — the environment beats the file
@@ -43,10 +43,6 @@ DRILL="${DRILL:-$PWD/scripts/raptor-restore-drill.sh}"
 passed=0; failed=0
 fail() { echo "  FAIL: $1"; failed=$(( failed + 1 )); }
 pass() { passed=$(( passed + 1 )); }
-
-# Two partitions of the set-aside table, as a restore before #35 still holds them.
-p1="stream_message_2026_08"
-p2="stream_message_default"
 
 # --- the harness ------------------------------------------------------------
 setup() {
@@ -190,21 +186,16 @@ expect_status "$out" FAILED
 expect_says "$out" "stream_message_2027_01(live=0)" "empty table missing"
 teardown
 
-# --- 6: the set-aside table's partitions must match exactly (until #35) -----
+# --- 6: a dump from before #35 does not pass against live after it ----------
+# It still holds the partitions of the table V38 set aside, which live no longer
+# has. Those are rows the restore holds and live does not, so the drill fails
+# rather than drilling a copy of something that is gone: drill a dump taken
+# after V39.
 setup
-printf 'stream_message\t300\ncapture_file\t7\n%s\t100\n%s\t0\n' "$p1" "$p2" > "$work/restored.tally"
-printf 'stream_message\t345\ncapture_file\t7\n%s\t100\n%s\t0\n' "$p1" "$p2" > "$work/live.tally"
-out=$(run)
-expect_status "$out" OK
-expect_says "$out" "2 partition(s) of the set-aside table match live exactly" "set-aside"
-teardown
-
-setup
-printf 'stream_message\t300\ncapture_file\t7\n%s\t99\n' "$p1" > "$work/restored.tally"
-printf 'stream_message\t345\ncapture_file\t7\n%s\t100\n' "$p1" > "$work/live.tally"
+printf 'stream_message\t300\ncapture_file\t7\nstream_message_2026_08\t100\n' > "$work/restored.tally"
 out=$(run)
 expect_status "$out" FAILED
-expect_says "$out" "$p1(restored=99 live=100)" "set-aside mismatch"
+expect_says "$out" "stream_message_2026_08(restored=100 live=0)" "pre-#35 dump"
 teardown
 
 # --- 7: --scheduled on another day, last verdict OK, does nothing -----------
