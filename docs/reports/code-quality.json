@@ -114,8 +114,8 @@
       "class": "BetfairCatalogue",
       "method": "resolve",
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java",
-      "begin_line": 221,
-      "end_line": 221,
+      "begin_line": 254,
+      "end_line": 254,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
@@ -246,8 +246,8 @@
       "class": "MarketScopeService",
       "method": "apply",
       "file": "src/main/java/com/stucray/raptor/scope/MarketScopeService.java",
-      "begin_line": 280,
-      "end_line": 280,
+      "begin_line": 310,
+      "end_line": 310,
       "message": "Avoid using literals such as \"CLOSED\" in if statements"
     },
     {
@@ -258,8 +258,8 @@
       "class": "MarketScopeService",
       "method": "apply",
       "file": "src/main/java/com/stucray/raptor/scope/MarketScopeService.java",
-      "begin_line": 284,
-      "end_line": 284,
+      "begin_line": 314,
+      "end_line": 314,
       "message": "Avoid using literals such as \"SETTLED\" in if statements"
     },
     {
@@ -608,7 +608,7 @@
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java",
       "begin_line": 52,
       "end_line": 52,
-      "message": "Possible God Class (WMC=54, ATFD=20, TCC=15.238%)"
+      "message": "Possible God Class (WMC=59, ATFD=21, TCC=20.833%)"
     },
     {
       "rule": "GodClass",
@@ -834,8 +834,8 @@
       "class": "MarketScopeService",
       "method": "poll",
       "file": "src/main/java/com/stucray/raptor/scope/MarketScopeService.java",
-      "begin_line": 149,
-      "end_line": 149,
+      "begin_line": 151,
+      "end_line": 151,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -859,7 +859,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java",
       "begin_line": 52,
-      "end_line": 458,
+      "end_line": 491,
       "message": "This class has too many methods, consider refactoring it."
     },
     {

@@ -11,7 +11,10 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,6 +55,9 @@ class MarketScopeIntegrationTest {
 		catalogue.control.clear();
 		catalogue.book.clear();
 		catalogue.asked.clear();
+		catalogue.entries.clear();
+		catalogue.entriesAsked.clear();
+		catalogue.failEntries = false;
 		// The fake is a context-scoped singleton, so its failure switch outlives
 		// the test that flipped it — reset it here or every later method inherits
 		// an unreachable catalogue.
@@ -69,6 +75,78 @@ class MarketScopeIntegrationTest {
 		assertThat(open).singleElement()
 				.satisfies(m -> assertThat(m.state()).isEqualTo(ScopeState.PENDING));
 		assertThat(service.plan().marketIds()).containsExactly("1.1");
+	}
+
+	/**
+	 * #42: each market in scope keeps its catalogue entry, as the upstream sent it,
+	 * and once. The entry is split by the database rather than decoded and
+	 * re-encoded, so a number keeps Betfair's spelling: {@code 1.10}, not {@code 1.1}.
+	 */
+	@Test
+	void eachMarketInScopeKeepsItsCatalogueEntryOnce() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.offer(market("1.2", "e1", KICKOFF, false, "OPEN"));
+		catalogue.entry("1.1", entry("1.1"));
+		catalogue.entry("1.2", entry("1.2"));
+
+		service.refresh();
+
+		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 1L), Map.entry("1.2", 1L));
+		assertThat(jdbc.sql("""
+						select entry = cast(? as jsonb) from raw.market_catalogue
+						where market_id = '1.1'""").param(entry("1.1"))
+				.query(Boolean.class).single()).isTrue();
+		assertThat(jdbc.sql("""
+						select entry->'description'->>'marketBaseRate' from raw.market_catalogue
+						where market_id = '1.1'""").query(String.class).single()).isEqualTo("1.10");
+		assertThat(jdbc.sql("""
+						select fetched_at from raw.market_catalogue where market_id = '1.1'""")
+				.query(java.time.OffsetDateTime.class).single().toInstant()).isEqualTo(NOW);
+
+		// Asked again on the next poll (the next slice keeps a change), and nothing
+		// new is written for an entry already kept.
+		clock.now = NOW.plus(Duration.ofMinutes(15));
+		service.refresh();
+
+		assertThat(catalogue.entriesAsked).hasSize(2)
+				.allSatisfy(ids -> assertThat(ids).containsExactlyInAnyOrder("1.1", "1.2"));
+		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 1L), Map.entry("1.2", 1L));
+	}
+
+	/**
+	 * #42: the entry describes what is captured and never decides it. A catalogue
+	 * that cannot give one leaves scope, the plan and the poll exactly as they
+	 * would have been, and the next poll asks again.
+	 */
+	@Test
+	void anEntryThatCannotBeFetchedCostsNothingElse() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.failEntries = true;
+
+		service.poll();
+
+		assertThat(states()).containsEntry("1.1", "PENDING");
+		assertThat(service.plan().marketIds()).containsExactly("1.1");
+		assertThat(service.discovery().consecutivePollFailures()).isZero();
+		assertThat(entryCounts()).isEmpty();
+
+		catalogue.failEntries = false;
+		catalogue.entry("1.1", entry("1.1"));
+		service.poll();
+
+		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 1L));
+	}
+
+	/** A market that has left scope is not asked about. */
+	@Test
+	void onlyMarketsInScopeAreAskedForTheirEntry() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "CLOSED"));
+		catalogue.offer(market("1.2", "e1", KICKOFF, false, "OPEN"));
+
+		service.refresh();
+
+		assertThat(catalogue.entriesAsked).singleElement()
+				.satisfies(ids -> assertThat(ids).containsExactly("1.2"));
 	}
 
 	@Test
@@ -639,6 +717,25 @@ class MarketScopeIntegrationTest {
 				.param(marketId).query(String.class).optional().orElse(null);
 	}
 
+	private Map<String, Long> entryCounts() {
+		Map<String, Long> counts = new LinkedHashMap<>();
+		jdbc.sql("select market_id, count(*) from raw.market_catalogue group by 1 order by 1")
+				.query((rs, n) -> counts.put(rs.getString(1), rs.getLong(2))).list();
+		return counts;
+	}
+
+	/** A market's entry in the shape of {@code list-market-catalogue-by-id.json}. */
+	private static String entry(String marketId) {
+		return """
+				{"marketId": "%s", "marketName": "Match Odds", "totalMatched": 10.5,
+				 "description": {"marketType": "MATCH_ODDS", "marketBaseRate": 1.10},
+				 "runners": [
+				  {"selectionId": 9100001, "runnerName": "Home", "sortPriority": 1,
+				   "handicap": 0.0, "metadata": {"runnerId": "9100001"}},
+				  {"selectionId": 9100002, "runnerName": "Away", "sortPriority": 2,
+				   "handicap": 0.0, "metadata": {"runnerId": "9100002"}}]}""".formatted(marketId);
+	}
+
 	private boolean requested(String marketId) {
 		return jdbc.sql("select requested from raw.market_scope where market_id = ?")
 				.param(marketId).query(Boolean.class).single();
@@ -729,6 +826,29 @@ class MarketScopeIntegrationTest {
 		}
 
 		final List<List<String>> asked = new ArrayList<>();
+
+		/**
+		 * Each market's catalogue entry as the upstream would send it (#42), by id.
+		 * Separate from {@link #markets} for the reason {@link #book} is: the entry
+		 * is a different request, and a market can be in scope without one.
+		 */
+		final Map<String, String> entries = new LinkedHashMap<>();
+		boolean failEntries;
+		final List<List<String>> entriesAsked = new ArrayList<>();
+
+		void entry(String marketId, String node) {
+			entries.put(marketId, node);
+		}
+
+		@Override
+		public List<String> entries(Collection<String> marketIds) {
+			if (failEntries) {
+				throw new IllegalStateException("catalogue entries unreachable (simulated)");
+			}
+			entriesAsked.add(List.copyOf(marketIds));
+			return List.of(marketIds.stream().filter(entries::containsKey).map(entries::get)
+					.collect(Collectors.joining(",", "[", "]")));
+		}
 	}
 
 	/** A clock a test can move a match through. */

@@ -28,6 +28,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -355,6 +356,64 @@ class BetfairCatalogueTest {
 				.map(ILoggingEvent::getFormattedMessage).toList();
 	}
 
+	/**
+	 * #42: a market's entry is asked for by id with every projection that
+	 * describes it, and the body comes back as Betfair sent it, character for
+	 * character. Decoding it would make the stored entry raptor's rendering.
+	 */
+	@Test
+	void entriesAreAskedForByIdAndReturnedVerbatim() {
+		String body = fixtureText("list-market-catalogue-by-id");
+		when(rest.postForText(eq("listMarketCatalogue/"), any())).thenReturn(body);
+
+		List<String> responses = catalogue.entries(List.of("1.900005001", "1.900005002"));
+
+		assertThat(responses).containsExactly(body);
+		ArgumentCaptor<Object> request = ArgumentCaptor.forClass(Object.class);
+		verify(rest).postForText(eq("listMarketCatalogue/"), request.capture());
+		assertThat(request.getValue()).isEqualTo(Map.of(
+				"filter", Map.of("marketIds", List.of("1.900005001", "1.900005002")),
+				"maxResults", "2",
+				"marketProjection", List.of("EVENT", "COMPETITION", "MARKET_START_TIME",
+						"MARKET_DESCRIPTION", "RUNNER_DESCRIPTION", "RUNNER_METADATA")));
+	}
+
+	/** #42: a request that fails costs its own markets, and the next is still made. */
+	@Test
+	void aFailedEntryRequestCostsOnlyItsOwnMarkets() {
+		when(rest.postForText(eq("listMarketCatalogue/"), any()))
+				.thenThrow(new BetfairException("listMarketCatalogue/ refused: HTTP 400 (TOO_MUCH_DATA)",
+						"TOO_MUCH_DATA"))
+				.thenReturn("[]");
+		List<String> ids = java.util.stream.IntStream.range(0, 150)
+				.mapToObj(i -> "1." + (900_000_000 + i)).toList();
+
+		assertThat(catalogue.entries(ids)).containsExactly("[]");
+		assertThat(logged(Level.WARN)).anySatisfy(w -> assertThat(w)
+				.contains("catalogue entries for 100 market(s) not fetched"));
+	}
+
+	/**
+	 * #42 leaves discovery exactly as it was: its 200-market page already uses
+	 * the whole weight budget, so one more weighted projection there would have
+	 * been refused on any busy card.
+	 */
+	@Test
+	void discoveryAsksForWhatItAlwaysHas() {
+		allMarkets();
+
+		ArgumentCaptor<Object> request = ArgumentCaptor.forClass(Object.class);
+		verify(rest, org.mockito.Mockito.atLeastOnce())
+				.post(eq("listMarketCatalogue/"), request.capture(), any());
+		assertThat(request.getAllValues()).allSatisfy(r -> {
+			Map<?, ?> body = (Map<?, ?>) r;
+			assertThat(body.get("maxResults")).isEqualTo("200");
+			assertThat(body.get("marketProjection")).isEqualTo(
+					List.of("EVENT", "COMPETITION", "MARKET_START_TIME", "MARKET_DESCRIPTION"));
+		});
+		verify(rest, never()).postForText(any(), any());
+	}
+
 	/** One query's markets: the union is scope's business, not the mapper's. */
 	private List<CatalogueMarket> requestedMarkets() {
 		return catalogue.poll(Duration.ofHours(24)).getFirst().markets();
@@ -364,6 +423,18 @@ class BetfairCatalogueTest {
 		return catalogue.poll(Duration.ofHours(24)).stream()
 				.flatMap(query -> query.markets().stream())
 				.toList();
+	}
+
+	private static String fixtureText(String name) {
+		try (InputStream in = BetfairCatalogueTest.class
+				.getResourceAsStream("/betfair-rest/" + name + ".json")) {
+			if (in == null) {
+				throw new IllegalStateException("missing fixture: " + name);
+			}
+			return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new IllegalStateException(e);
+		}
 	}
 
 	private static List<Map<String, Object>> fixture(String name) {

@@ -38,6 +38,14 @@ is public, not Betfair's data.
                            Two markets asked for by id after the match:
                            inplay true AND status CLOSED, which is what the
                            real upstream says (it does not clear inplay).
+  list-market-catalogue-by-id.json
+                           The catalogue entry raptor stores per market (#42):
+                           asked for by marketIds with the runner projections,
+                           so each node carries runners with names, selection
+                           ids, sort priorities and a metadata map. Football's
+                           metadata holds only runnerId; that is what the real
+                           response held. Country ES, the only one the capture
+                           has, so the fixture stays inside its shape.
 
 Deterministic, with no randomness at all.
 """
@@ -190,6 +198,36 @@ def after_kickoff() -> list[dict]:
     return nodes
 
 
+# Runner names by market type and sort priority. Match Odds' first two are the
+# teams, in the order the event name gives them.
+OUTCOMES = {
+    "OVER_UNDER_15": ["Under 1.5 Goals", "Over 1.5 Goals"],
+    "OVER_UNDER_25": ["Under 2.5 Goals", "Over 2.5 Goals"],
+    "OVER_UNDER_35": ["Under 3.5 Goals", "Over 3.5 Goals"],
+}
+
+
+def runner_names(market_type: str, event_name: str) -> list[str]:
+    if market_type == "MATCH_ODDS":
+        home, away = event_name.split(" v ")
+        return [home, away, "The Draw"]
+    return OUTCOMES[market_type]
+
+
+def catalogue_by_id() -> list[dict]:
+    """Each market's catalogue entry with its runners, as fetched by id (#42)."""
+    nodes = []
+    for node in catalogue():
+        market_type = node["description"]["marketType"]
+        names = runner_names(market_type, node["event"]["name"])
+        node["event"]["countryCode"] = "ES"
+        node["runners"] = [{"handicap": 0.0, "metadata": {"runnerId": str(sid)},
+                            "runnerName": name, "selectionId": sid, "sortPriority": i + 1}
+                           for i, ((sid, _, _), name) in enumerate(zip(RUNNERS[market_type], names))]
+        nodes.append(node)
+    return nodes
+
+
 def write(out: Path, name: str, document: list[dict]) -> None:
     (out / name).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
@@ -203,6 +241,7 @@ def main() -> None:
     write(out, "list-market-catalogue.json", catalogue())
     write(out, "list-market-book.json", book())
     write(out, "list-market-book-after-kickoff.json", after_kickoff())
+    write(out, "list-market-catalogue-by-id.json", catalogue_by_id())
 
 
 if __name__ == "__main__":

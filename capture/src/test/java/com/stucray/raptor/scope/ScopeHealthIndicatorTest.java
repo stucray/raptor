@@ -204,6 +204,12 @@ class ScopeHealthIndicatorTest {
 			return java.util.List.of();
 		}
 
+		/** Never asked: these tests read health, not scope. */
+		@Override
+		public java.util.List<String> entries(java.util.Collection<String> marketIds) {
+			return java.util.List.of();
+		}
+
 		@Override
 		public LeagueResolution resolution() {
 			return LeagueResolution.NONE;

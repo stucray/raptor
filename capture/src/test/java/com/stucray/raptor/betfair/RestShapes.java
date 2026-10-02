@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,12 +20,16 @@ import tools.jackson.databind.json.JsonMapper;
  * answer with different nodes. A single shape would accept a catalogue node
  * carrying a book's keys, and that is the kind of invention this exists to catch.
  * A file belongs to the endpoint its name starts with, so a second capture of one
- * endpoint ({@code list-market-book-after-kickoff.json}) joins the first.
+ * endpoint ({@code list-market-book-after-kickoff.json}) joins the first. The
+ * LONGEST matching name wins: {@code list-market-catalogue-by-id} is a different
+ * request with different projections (#42), and its file name also starts with
+ * {@code list-market-catalogue}.
  */
 final class RestShapes {
 
 	static final List<String> ENDPOINTS =
-			List.of("list-competitions", "list-market-catalogue", "list-market-book");
+			List.of("list-competitions", "list-market-catalogue", "list-market-catalogue-by-id",
+					"list-market-book");
 
 	private static final JsonMapper MAPPER = JsonMapper.builder().build();
 
@@ -39,7 +44,8 @@ final class RestShapes {
 		}
 		for (Path file : files) {
 			String name = file.getFileName().toString();
-			String endpoint = ENDPOINTS.stream().filter(name::startsWith).findFirst()
+			String endpoint = ENDPOINTS.stream().filter(name::startsWith)
+					.max(Comparator.comparingInt(String::length))
 					.orElseThrow(() -> new IllegalStateException("no endpoint for " + file));
 			shapes.get(endpoint).add(MAPPER.readTree(Files.readString(file, StandardCharsets.UTF_8)));
 		}

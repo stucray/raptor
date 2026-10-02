@@ -13,7 +13,8 @@ endpoint did not.
 
 The real responses are Betfair's data and are not committed. They were
 captured from the live API, the first three on **2026-09-02 at 03:52Z** and
-`list-market-book-after-kickoff.json` on **2026-09-04 at 04:42Z**, by
+`list-market-book-after-kickoff.json` on **2026-09-04 at 04:42Z**, and
+`list-market-catalogue-by-id.json` on **2026-10-02 at 07:05Z** (#42), by
 `scripts/capture-betfair-rest.py`, and hand-trimmed with every node kept
 verbatim. They live in custody, at
 `$RAPTOR_DATA_ROOT/betfair-rest/captured/`, beside this file's pre-#304
@@ -30,6 +31,7 @@ same head and agreed only with each other.
 | `list-market-catalogue.json` | 6 | One event's whole four-market bundle plus two markets from a second event, enough to exercise event grouping and every captured market type |
 | `list-market-book.json` | 5 | The state half: `status` and `inplay`. **Five, not six**, as in the capture: the real book covered the first twenty ids of the catalogue query and one catalogue market fell outside it, so one catalogue market has no book row |
 | `list-market-book-after-kickoff.json` | 2 | Two of the *previous night's* markets, asked for by id a full day after kickoff. `inplay: true`, `status: CLOSED`: the state discovery can no longer reach, and what `follow()` is tested against |
+| `list-market-catalogue-by-id.json` | 6 | Each market's entry as raptor stores it (#42): asked for by `marketIds` with the runner projections, so runners carry names, selection ids, sort priorities and a `metadata` map. One event's four market types plus two markets of another, as in the trimmed capture. Football's `metadata` holds only `runnerId`, which is all the real response held, and the country is `ES`, the only one the capture has |
 | `list-competitions.json` | 7 | Several competitions, including one the programme asks for by name, and not "Italian Serie B", which it also asks for. So both a name that resolves and one that does not are covered |
 
 ## What the capture settled
@@ -57,6 +59,18 @@ same head and agreed only with each other.
   `status: CLOSED`. A mapper that tested in-play before status would promote a
   finished market to LIVE and never see it end; `MarketScopeService.apply`
   checks the terminal statuses first for exactly this reason.
+
+- **A by-id catalogue request names every runner, and a closed market has no
+  entry.** Asked for by `marketIds` with `RUNNER_DESCRIPTION` and
+  `RUNNER_METADATA` (2026-10-02), every runner came back with `runnerName`,
+  `selectionId`, `sortPriority`, `handicap` and a `metadata` map. Finished
+  markets 3 to 30 days old came back with no entry at all, while
+  `listMarketBook` still answered for them. And the projections are weighed:
+  `MARKET_DESCRIPTION` plus `RUNNER_METADATA` was refused with `TOO_MUCH_DATA`
+  at 200 markets and answered at 100.
+- **The by-id capture came from a script that was not committed.** Its requests
+  are the ones `BetfairCatalogue.entries` makes, and its responses are in
+  custody beside the others.
 
 ## Known gap
 

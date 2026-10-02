@@ -153,6 +153,39 @@ class BetfairCatalogue implements MarketCatalogue {
 	}
 
 	/**
+	 * Each market's entry, by id, with every projection that describes it (#42).
+	 *
+	 * <p>Read as text and passed on untouched: the entry is stored, and decoding it
+	 * here would make the stored value raptor's rendering of what Betfair said.
+	 * Batched by {@link CatalogueEntryRequests}, so no request can be refused for
+	 * weight, and each batch fails alone.
+	 */
+	@Override
+	public List<String> entries(Collection<String> marketIds) {
+		if (!properties.configured() || marketIds.isEmpty()) {
+			return List.of();
+		}
+		List<CatalogueEntryRequests.Projection> projections = CatalogueEntryRequests.PROJECTIONS;
+		List<String> names = CatalogueEntryRequests.names(projections);
+		List<String> responses = new ArrayList<>();
+		for (List<String> batch : CatalogueEntryRequests.batches(List.copyOf(marketIds),
+				CatalogueEntryRequests.marketsPerRequest(projections))) {
+			try {
+				responses.add(rest.postForText("listMarketCatalogue/",
+						Map.of("filter", Map.of("marketIds", batch),
+								"maxResults", String.valueOf(batch.size()),
+								"marketProjection", names)));
+			} catch (RuntimeException e) {
+				// This batch's entries wait for the next poll. The others still
+				// arrive: one refusal must not cost every market in scope.
+				log.warn("catalogue entries for {} market(s) not fetched; retrying on the next "
+						+ "poll ({})", batch.size(), e.toString());
+			}
+		}
+		return responses;
+	}
+
+	/**
 	 * Say what became of the configured names, at the level each deserves (#9).
 	 */
 	private void report(Resolved resolved, int configured) {
