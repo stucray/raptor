@@ -25,7 +25,16 @@ class CatalogueEntries {
 	}
 
 	/**
-	 * Store each market's entry from one response, if the market has none yet.
+	 * Store each market's entry from one response, when it differs from the
+	 * market's most recent stored entry (#43), or the market has none (#42).
+	 *
+	 * <p><b>"Differs" is decided by the database, against what is stored.</b> Not
+	 * against a copy held here, which a restart would lose and which could drift
+	 * from the table. The comparison is {@code jsonb} equality, which already sets
+	 * key order and whitespace aside, so a row means Betfair changed what it said,
+	 * never only how it laid it out. A market with no row compares against NULL,
+	 * so its first entry is always written. One statement per response, however
+	 * many markets it holds.
 	 *
 	 * @param response a {@code listMarketCatalogue} body: a JSON array of entries
 	 * @param fetchedAt when it was asked for
@@ -37,9 +46,11 @@ class CatalogueEntries {
 						select e->>'marketId', ?, e
 						from jsonb_array_elements(cast(? as jsonb)) e
 						where e->>'marketId' is not null
-						  and not exists (
-							select 1 from raw.market_catalogue c
-							where c.market_id = e->>'marketId')""")
+						  and e is distinct from (
+							select c.entry from raw.market_catalogue c
+							where c.market_id = e->>'marketId'
+							order by c.fetched_at desc
+							limit 1)""")
 				// OffsetDateTime, not Instant: pgjdbc cannot infer a type for an
 				// Instant parameter.
 				.params(fetchedAt.atOffset(ZoneOffset.UTC), response)
