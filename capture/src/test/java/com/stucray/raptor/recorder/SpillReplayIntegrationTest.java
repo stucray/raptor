@@ -50,6 +50,7 @@ class SpillReplayIntegrationTest {
 	@Autowired Clock clock;
 	@Autowired @Acquisition JdbcClient jdbc;
 	@Autowired RawWriter writer;
+	@Autowired SpillDirectory directory;
 
 	@DynamicPropertySource
 	static void spillDirectory(DynamicPropertyRegistry registry) {
@@ -132,6 +133,8 @@ class SpillReplayIntegrationTest {
 		// The distance between these two is the length of the outage — the only
 		// record that the system of record briefly was not one.
 		assertThat(ledger.spilledAt()).isBeforeOrEqualTo(ledger.ingestedAt());
+		// Measured, not defaulted: an ordinary replay found none already stored.
+		assertThat(ledger()).containsExactly(spilled.size() + "/0");
 	}
 
 	/**
@@ -164,28 +167,81 @@ class SpillReplayIntegrationTest {
 	}
 
 	/**
-	 * A spilled batch that had in fact been stored cannot be stored twice (#33).
+	 * A spilled batch that had in fact been stored is ingested, not refused, and
+	 * the ledger says so (#40).
 	 *
 	 * <p>The recorder spills when a write's outcome is unknown, and "unknown"
-	 * includes a COPY that committed on the server while the client saw the
-	 * connection fail. Replaying that file used to put every message in again.
-	 * The session key now refuses it: the replay fails, nothing is duplicated,
-	 * and the file is kept, because a file is only ever deleted after a commit.
+	 * includes a COMMIT that landed on the server while the reply was lost. Until
+	 * #40 the session key refused the replay, and three drains later the file was
+	 * set aside with an ERROR saying its messages were not captured. They were.
+	 * Now nothing is written twice, the ledger counts what was already there, the
+	 * file is removed, and nothing is set aside. Driven through the drain, because
+	 * the false alarm was the drain's.
 	 */
 	@Test
-	void aFileWhoseMessagesAreAlreadyStoredCannotDuplicateThem() throws Exception {
+	void aFileWhoseMessagesAreAlreadyStoredIsIngestedAndCounted() throws Exception {
 		// The COPY that committed although the recorder never heard back.
 		writer.write(spilled);
 		assertThat(rows()).isEqualTo(spilled.size());
+
+		for (int pass = 0; pass < 3; pass++) {
+			drain.drainOnce(Integer.MAX_VALUE);
+		}
+
+		assertThat(rows()).as("nothing is written twice").isEqualTo(spilled.size());
+		assertThat(ledger()).containsExactly(spilled.size() + "/" + spilled.size());
+		assertThat(replayer.pending()).as("the file is removed").isEmpty();
+		assertThat(directory.setAside()).as("and never set aside").isEmpty();
+	}
+
+	/**
+	 * Part of a file stored, part not: only the absent messages are appended, and
+	 * the ledger counts the rest (#40). A spill file can hold more than one batch,
+	 * so the in-doubt batch may sit beside one that really did fail.
+	 */
+	@Test
+	void onlyTheMessagesNotStoredAreAppended() throws Exception {
+		int half = spilled.size() / 2;
+		assertThat(half).as("the fixture has messages on both sides").isPositive();
+		writer.write(spilled.subList(0, half));
+
+		List<JobExecution> executions = replayer.replayPending();
+
+		assertThat(executions).singleElement()
+				.extracting(JobExecution::getStatus).isEqualTo(BatchStatus.COMPLETED);
+		assertThat(rows()).isEqualTo(spilled.size());
+		assertThat(ledger()).containsExactly(spilled.size() + "/" + half);
+	}
+
+	/**
+	 * A stored message with the same session key and DIFFERENT content is not the
+	 * same message, and the replay is refused whole: nothing appended, nothing
+	 * ledgered, and the file kept. Skipping it would hide exactly what the key is
+	 * there to catch.
+	 */
+	@Test
+	void aStoredMessageWithTheSameKeyAndOtherContentRefusesTheReplay() throws Exception {
+		RawMessage first = spilled.getFirst();
+		writer.write(List.of(new RawMessage(first.sessionId(), first.fileId(), first.marketId(),
+				first.pt(), first.receivedAt(), first.seq(), "{\"op\":\"mcm\",\"other\":true}",
+				first.segmentType(), first.changeType())));
 
 		List<JobExecution> executions = replayer.replayPending();
 
 		assertThat(executions).singleElement()
 				.extracting(JobExecution::getStatus).isEqualTo(BatchStatus.FAILED);
-		assertThat(rows()).as("the key refuses the second copy").isEqualTo(spilled.size());
-		assertThat(jdbc.sql("select count(*) from raw.spill_file").query(Long.class).single())
-				.as("the ledger row rolled back with the refused write").isZero();
+		assertThat(rows()).as("nothing appended").isOne();
+		assertThat(ledger()).as("nothing ledgered").isEmpty();
 		assertThat(replayer.pending()).as("never deleted without a commit").hasSize(1);
+	}
+
+	/** The comparison and the append must see one table, so there must be one transaction. */
+	@Test
+	void aReplayOutsideATransactionIsRefused() {
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> writer.replay(spilled))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("transaction");
+		assertThat(rows()).isZero();
 	}
 
 	/**
@@ -229,6 +285,12 @@ class SpillReplayIntegrationTest {
 		assertThat(replayer.pending()).as("the second file waits for the next pass").hasSize(1);
 	}
 
+	/** Each ledger row as "messages/already_present". */
+	private List<String> ledger() {
+		return jdbc.sql("select messages || '/' || coalesce(already_present::text, 'null') "
+				+ "from raw.spill_file").query(String.class).list();
+	}
+
 	private long rows() {
 		return jdbc.sql("select count(*) from raw.stream_message where session_id = ?")
 				.param(sessionId).query(Long.class).single();
@@ -244,10 +306,17 @@ class SpillReplayIntegrationTest {
 		return messages;
 	}
 
+	/**
+	 * Everything under the directory, the set-aside subdirectory included. A test
+	 * that fails by setting a file aside must fail alone, not take every later
+	 * test's setup with it, which is what a flat delete did.
+	 */
 	private static void clearSpillDirectory() throws IOException {
-		try (var stream = Files.list(SPILL_DIRECTORY)) {
-			for (Path path : stream.toList()) {
-				Files.deleteIfExists(path);
+		try (var stream = Files.walk(SPILL_DIRECTORY)) {
+			for (Path path : stream.sorted(java.util.Comparator.reverseOrder()).toList()) {
+				if (!path.equals(SPILL_DIRECTORY)) {
+					Files.deleteIfExists(path);
+				}
 			}
 		}
 	}

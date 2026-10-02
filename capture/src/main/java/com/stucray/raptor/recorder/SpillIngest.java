@@ -26,13 +26,20 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *   <li>the file is unlinked <b>only after</b> that transaction commits.
  * </ol>
  *
- * <p>Crash between them and the file replays; the ledger's unique key on
- * {@code name} then refuses the second insert, the messages are not written
- * again, and the file is unlinked. Crash after them and the file is already
- * gone. There is no window in which a file is both deleted and not ingested,
- * and no case that needs a {@code delete} against {@code raw} — which matters,
- * because {@code raw} is append-only and an idempotency scheme that had to
- * delete from it would be repealing that rather than respecting it.
+ * <p>Crash between them and the file replays; the ledger already names it, so
+ * the messages are not written again, and the file is unlinked. Crash after them
+ * and the file is already gone. There is no window in which a file is both
+ * deleted and not ingested, and no case that needs a {@code delete} against
+ * {@code raw} — which matters, because {@code raw} is append-only and an
+ * idempotency scheme that had to delete from it would be repealing that rather
+ * than respecting it.
+ *
+ * <p><b>Some of a file's messages may already be stored (#40).</b> The recorder
+ * spills a batch whose write it cannot confirm, and that includes one whose
+ * COMMIT landed while the reply was lost. So the replay appends only what is
+ * absent, counts what was already there, identically, and the ledger row says
+ * how many. The row is written after the replay, in the same transaction,
+ * because {@code raw} is never updated and the count is not known before.
  *
  * <p>Out-of-order arrival is not a problem to solve: rows carry Betfair's
  * {@code pt} and a {@code seq} monotonic within the session, so a batch landing
@@ -54,7 +61,11 @@ class SpillIngest {
 		MISSING
 	}
 
-	record Result(Outcome outcome, int messages) {}
+	/**
+	 * @param messages messages written
+	 * @param alreadyPresent messages that were already stored, identically (#40)
+	 */
+	record Result(Outcome outcome, long messages, long alreadyPresent) {}
 
 	private final JdbcClient jdbc;
 	private final RawWriter writer;
@@ -71,29 +82,47 @@ class SpillIngest {
 	Result ingest(String name) throws IOException, SQLException {
 		Path file = directory.resolve(name);
 		if (!Files.exists(file)) {
-			return new Result(Outcome.MISSING, 0);
+			return new Result(Outcome.MISSING, 0, 0);
+		}
+		if (ingested(name)) {
+			log.info("spill file {} was already ingested; removing it", name);
+			unlinkAfterCommit(file);
+			return new Result(Outcome.ALREADY_INGESTED, 0, 0);
 		}
 
 		SpillFile.Contents contents = SpillFile.read(file);
-		Optional<Long> claimed = claim(name, contents, Files.size(file));
-		if (claimed.isEmpty()) {
-			log.info("spill file {} was already ingested; removing it", name);
-			unlinkAfterCommit(file);
-			return new Result(Outcome.ALREADY_INGESTED, 0);
+		RawWriter.Replayed replayed = writer.replay(contents.messages());
+		if (claim(name, contents, Files.size(file), replayed.alreadyPresent()).isEmpty()) {
+			// Another replay ledgered this file between the check above and here.
+			// Throwing rolls back what this one appended, and the next pass finds
+			// the ledger row and simply removes the file.
+			throw new IllegalStateException("spill file " + name + " was ingested concurrently");
 		}
-
-		writer.write(contents.messages());
 		unlinkAfterCommit(file);
-		log.info("replayed {} message(s) from {} (spilled {}, cause {})",
-				contents.messages().size(), name, contents.header().spilledAt(),
-				contents.header().cause());
-		return new Result(Outcome.INGESTED, contents.messages().size());
+		if (replayed.alreadyPresent() > 0) {
+			log.info("replayed {} message(s) from {} (spilled {}, cause {}); {} more were already "
+					+ "stored, their write having committed without the recorder hearing back",
+					replayed.written(), name, contents.header().spilledAt(),
+					contents.header().cause(), replayed.alreadyPresent());
+		} else {
+			log.info("replayed {} message(s) from {} (spilled {}, cause {})",
+					replayed.written(), name, contents.header().spilledAt(),
+					contents.header().cause());
+		}
+		return new Result(Outcome.INGESTED, replayed.written(), replayed.alreadyPresent());
 	}
 
-	private Optional<Long> claim(String name, SpillFile.Contents contents, long bytes) {
+	private boolean ingested(String name) {
+		return jdbc.sql("select exists (select 1 from raw.spill_file where name = ?)")
+				.param(name).query(Boolean.class).single();
+	}
+
+	private Optional<Long> claim(String name, SpillFile.Contents contents, long bytes,
+			long alreadyPresent) {
 		return jdbc.sql("""
-						insert into raw.spill_file (name, session_id, cause, messages, bytes, spilled_at)
-						values (?, ?, ?, ?, ?, ?)
+						insert into raw.spill_file
+							(name, session_id, cause, messages, bytes, spilled_at, already_present)
+						values (?, ?, ?, ?, ?, ?, ?)
 						on conflict (name) do nothing
 						returning id""")
 				.params(name,
@@ -103,7 +132,8 @@ class SpillIngest {
 						bytes,
 						// OffsetDateTime, not Instant: pgjdbc cannot infer a SQL type for
 						// an Instant parameter and throws.
-						contents.header().spilledAt().atOffset(ZoneOffset.UTC))
+						contents.header().spilledAt().atOffset(ZoneOffset.UTC),
+						Math.toIntExact(alreadyPresent))
 				.query(Long.class)
 				.optional();
 	}

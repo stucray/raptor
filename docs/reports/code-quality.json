@@ -3,9 +3,9 @@
     "tool": "pmd",
     "tool_version": "7.24.0",
     "ruleset": "pmd-ruleset.xml",
-    "total_findings": 77,
+    "total_findings": 76,
     "by_priority": {
-      "2": 6,
+      "2": 5,
       "3": 71
     }
   },
@@ -632,18 +632,6 @@
       "file": "src/main/java/com/stucray/raptor/archive/ArchiveRefresh.java",
       "begin_line": 25,
       "end_line": 25,
-      "message": "Annotate this interface with @FunctionalInterface or with @SuppressWarnings(\"PMD.ImplicitFunctionalInterface\") to clarify your intent."
-    },
-    {
-      "rule": "ImplicitFunctionalInterface",
-      "ruleset": "Best Practices",
-      "priority": 2,
-      "package": "com.stucray.raptor.rawstore",
-      "class": "RawWriter",
-      "method": "",
-      "file": "src/main/java/com/stucray/raptor/rawstore/RawWriter.java",
-      "begin_line": 17,
-      "end_line": 17,
       "message": "Annotate this interface with @FunctionalInterface or with @SuppressWarnings(\"PMD.ImplicitFunctionalInterface\") to clarify your intent."
     },
     {

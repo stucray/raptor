@@ -36,6 +36,12 @@ final class RecordingWriter implements RawWriter {
 		return messages.size();
 	}
 
+	/** Never called: these tests drive the write loop, and replay is the drain's. */
+	@Override
+	public Replayed replay(List<RawMessage> messages) {
+		throw new UnsupportedOperationException("the write loop never replays");
+	}
+
 	/**
 	 * Refuse any batch containing a message this matches, with {@code sqlState}.
 	 *
