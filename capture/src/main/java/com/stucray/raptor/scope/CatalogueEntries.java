@@ -56,4 +56,22 @@ class CatalogueEntries {
 				.params(fetchedAt.atOffset(ZoneOffset.UTC), response)
 				.update();
 	}
+
+	/**
+	 * How many markets in scope have no entry kept yet (#44).
+	 *
+	 * <p>The number that matters while it can still change: once a market closes,
+	 * Betfair no longer serves its entry, so a fetch that keeps failing has to be
+	 * visible before then or the entry is lost for good.
+	 */
+	int inScopeWithoutEntry() {
+		Long count = jdbc.sql("""
+						select count(*) from raw.market_scope s
+						where s.state <> 'DONE'
+						  and not exists (
+							select 1 from raw.market_catalogue c
+							where c.market_id = s.market_id)""")
+				.query(Long.class).single();
+		return Math.toIntExact(count);
+	}
 }
