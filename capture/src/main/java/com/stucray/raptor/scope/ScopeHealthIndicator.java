@@ -40,11 +40,14 @@ class ScopeHealthIndicator implements HealthIndicator {
 
 	private final ScopeCensus census;
 	private final KickoffLookahead lookahead;
+	private final CatalogueEntries entries;
 	private final Clock clock;
 
-	ScopeHealthIndicator(ScopeCensus census, KickoffLookahead lookahead, Clock clock) {
+	ScopeHealthIndicator(ScopeCensus census, KickoffLookahead lookahead, CatalogueEntries entries,
+			Clock clock) {
 		this.census = census;
 		this.lookahead = lookahead;
+		this.entries = entries;
 		this.clock = clock;
 	}
 
@@ -55,7 +58,13 @@ class ScopeHealthIndicator implements HealthIndicator {
 				.withDetail("marketsInScope", scope.marketsInScope())
 				.withDetail("pending", scope.pending())
 				.withDetail("subscribed", scope.subscribed())
-				.withDetail("live", scope.live());
+				.withDetail("live", scope.live())
+				// #44: markets in scope whose catalogue entry is not kept yet. A
+				// detail, never a status: an entry is fetched on the next poll after a
+				// market enters scope, so a market can rightly be counted here for up
+				// to a poll interval. What matters is a count that does not fall,
+				// because once the market closes Betfair no longer serves the entry.
+				.withDetail("marketsWithoutCatalogueEntry", entries.inScopeWithoutEntry());
 		Instant next = scope.nextKickoff();
 		if (next != null) {
 			// The one fact that makes an empty horizon legible rather than merely

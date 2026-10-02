@@ -28,8 +28,24 @@ class ScopeHealthIndicatorTest {
 	private final FakeLookahead catalogue = new FakeLookahead();
 	private final KickoffLookahead lookahead =
 			new KickoffLookahead(provider(catalogue), scopeProperties(), CLOCK);
+	private final CatalogueEntries entries = mock(CatalogueEntries.class);
 	private final ScopeHealthIndicator indicator =
-			new ScopeHealthIndicator(census, lookahead, CLOCK);
+			new ScopeHealthIndicator(census, lookahead, entries, CLOCK);
+
+	/**
+	 * #44: markets without a catalogue entry are counted and reported, and the
+	 * count never changes the verdict. Counting is not judging.
+	 */
+	@Test
+	void reportsMarketsWithoutACatalogueEntryAndStaysUp() {
+		when(census.summarise()).thenReturn(new ScopeSummary(4, 2, 1, 1, NOW.plusSeconds(1800)));
+		when(entries.inScopeWithoutEntry()).thenReturn(3);
+
+		Health health = indicator.health();
+
+		assertThat(health.getStatus()).isEqualTo(Status.UP);
+		assertThat(health.getDetails()).containsEntry("marketsWithoutCatalogueEntry", 3);
+	}
 
 	/** 03:00 on a Tuesday: nothing to record, and nothing wrong. */
 	@Test
