@@ -409,5 +409,138 @@ expect_sent_count 0 "partition runway"
 if printf '%s' "$out" | grep -q "RUNWAY"; then fail "runway still reported: $out"; else pass; fi
 teardown
 
+# --- 25-33: on battery before scope opens (#50) -------------------------------
+# The match lost on 2026-09-28 never entered scope: the Mac slept on battery
+# 4h12m before kickoff, so ON-BATTERY (in scope only) had nothing to say. These
+# payloads carry the scope `lookahead` block as ScopeHealthIndicator publishes it.
+lookahead_json() { # $1 = marketsInScope  $2 = known  $3 = stale
+                   # $4 = secondsToNextKickoff ("" = no kickoff in the window)
+  local look="{\"known\":$2,\"stale\":$3,\"windowSeconds\":172800,\"consecutiveFailures\":0,\"measuredSecondsAgo\":120"
+  if [[ -n "${4:-}" ]]; then
+    look="$look,\"nextKickoff\":\"2026-09-28T18:30:00Z\",\"secondsToNextKickoff\":$4,\"secondsUntilScopeOpens\":$(( $4 > 14400 ? $4 - 14400 : 0 ))"
+  fi
+  capture_json 3600 UP 2026-09-07T23:31:21Z COMPLETED COMPLETED \
+    | jq -c --argjson n "$1" --argjson look "$look}" \
+        '.components.scope.details = {"marketsInScope":$n,"live":0,"lookahead":$look}'
+}
+battery() { # $1 = "Battery Power" or "AC Power"; assertions held either way
+  cat > "$work/bin/pmset" <<STUB
+#!/bin/bash
+case "\$*" in
+  *batt*)       echo "Now drawing from '$1'" ;;
+  *assertions*) echo "PreventUserIdleSystemSleep     1"; echo "PreventSystemSleep             1" ;;
+esac
+exit 0
+STUB
+  chmod +x "$work/bin/pmset"
+}
+
+# --- 25: the 09-28 shape fires, once, names the kickoff, and clears on AC -----
+setup "$(lookahead_json 0 true false 15120)"   # 4h12m
+battery "Battery Power"
+out=$(run)
+expect_status "$out" BATTERY-BEFORE-SCOPE
+grep -q "kickoff 2026-09-28T18:30:00Z in 4h12m" "$work/sent.log" \
+  || fail "the page should name the kickoff and how far off it is: $(cat "$work/sent.log")"
+pass
+grep -q "scope opens in 12m" "$work/sent.log" \
+  || fail "the page should say when scope opens: $(cat "$work/sent.log")"
+pass
+out=$(run); out=$(run)
+expect_sent_count 1 "three passes on battery, one page"
+[[ -s "$work/restarts.log" ]] && fail "a battery page restarted the backend" || pass
+battery "AC Power"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 2 "the page, then the recovery on AC"
+grep -q "recovered (BATTERY-BEFORE-SCOPE → OK)" "$work/sent.log" \
+  || fail "plugging in should clear it: $(cat "$work/sent.log")"
+pass
+teardown
+
+# --- 26: on AC, the same lookahead is silent ----------------------------------
+setup "$(lookahead_json 0 true false 15120)"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 0 "on AC before scope"
+teardown
+
+# --- 27: exactly 5h fires; 5h and a second does not --------------------------
+# 5h is load-bearing (#50): the true case slept 4h12m out, so a 3h window misses it.
+setup "$(lookahead_json 0 true false 18000)"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" BATTERY-BEFORE-SCOPE
+teardown
+setup "$(lookahead_json 0 true false 18001)"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 0 "a kickoff beyond 5h"
+teardown
+
+# --- 28: a kickoff already past is not a reason to plug in --------------------
+setup "$(lookahead_json 0 true false -60)"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" OK
+teardown
+
+# --- 29: with markets in scope it is ON-BATTERY's finding, not this one -------
+setup "$(lookahead_json 3 true false 3600)"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" ON-BATTERY
+printf '%s' "$out" | grep -q "BATTERY-BEFORE-SCOPE" \
+  && fail "in scope, ON-BATTERY speaks alone: $out" || pass
+teardown
+
+# --- 30: no kickoff in the window is silent -----------------------------------
+setup "$(lookahead_json 0 true false "")"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 0 "battery, no kickoff in the window"
+printf '%s' "$out" | grep -q "lookahead" && fail "a known, clear window is not a finding: $out" || pass
+teardown
+
+# --- 31: an UNKNOWN lookahead on battery is named, and does not page ----------
+setup "$(lookahead_json 0 false false "")"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 0 "battery, lookahead unknown"
+printf '%s' "$out" | grep -q "lookahead is unavailable" \
+  || fail "an unknown lookahead on battery should be named, not silent: $out"
+pass
+teardown
+
+# --- 32: a STALE lookahead on battery is named, and does not page -------------
+setup "$(lookahead_json 0 true true 3600)"
+battery "Battery Power"
+out=$(run)
+expect_status "$out" OK
+expect_sent_count 0 "battery, lookahead stale"
+printf '%s' "$out" | grep -q "lookahead is stale" \
+  || fail "a stale lookahead on battery should be named, not silent: $out"
+pass
+teardown
+
+# --- 33: a stale lookahead after a page HOLDS it, never reads as clear --------
+# The lookahead goes stale exactly when the Mac has been asleep, so a wake on
+# battery after the page is the case most likely to be read as "recovered".
+setup "$(lookahead_json 0 true false 15120)"
+battery "Battery Power"
+out=$(run)
+printf '%s' "$(lookahead_json 0 true true 14000)" > "$work/capture.json"
+out=$(run)
+expect_status "$out" BATTERY-BEFORE-SCOPE
+expect_sent_count 1 "the page, held through a stale lookahead"
+grep -q "recovered" "$work/sent.log" && fail "a stale lookahead read as clear: $(cat "$work/sent.log")" || pass
+printf '%s' "$(lookahead_json 0 false false "")" > "$work/capture.json"
+out=$(run)
+expect_status "$out" BATTERY-BEFORE-SCOPE
+teardown
+
 echo "  $passed passed, $failed failed"
 exit $(( failed > 0 ? 1 : 0 ))

@@ -59,6 +59,9 @@
 #                   assertion → MAY-SLEEP. Host-only, and it has to be: raptor
 #                   runs in a Linux container and cannot see host power, which is
 #                   the whole reason `keep-awake` is a launchd agent (#107).
+#                   And nothing in scope, on battery, with a known kickoff within
+#                   BATTERY_BEFORE_SCOPE_S → BATTERY-BEFORE-SCOPE (#50): a sleep
+#                   before scope opens loses the card with no in-scope alert at all.
 #
 # AND ONE ACTION, NOT JUST A NOTIFICATION (#184). Capture normally runs
 # unattended, so "what does the system do by itself?" is the primary question
@@ -169,7 +172,7 @@
 # Overridable env: HEALTH_URL, CAPTURE_URL, RAPTOR_SECRETS, NTFY_BASE_URL,
 #                  NTFY_ENABLED, NTFY_TOPIC, FRAME_STALE_S, BACKEND_CONTAINER,
 #                  RESTART_ENABLED, RESTART_AFTER, RESTART_COOLDOWN_S,
-#                  STALE_CLOSE_OUT_S.
+#                  STALE_CLOSE_OUT_S, BATTERY_BEFORE_SCOPE_S.
 #
 # Tunables:
 # Configuration first, before any default below reads a setting: ops.env
@@ -190,6 +193,11 @@ RESTART_AFTER="${RESTART_AFTER:-3}"             # consecutive qualifying checks,
                                                 # ~15 minutes at the 5-minute cadence.
 RESTART_COOLDOWN_S="${RESTART_COOLDOWN_S:-21600}"  # 6h: longer than a card. One
                                                 # attempt, then it is a human's.
+
+BATTERY_BEFORE_SCOPE_S="${BATTERY_BEFORE_SCOPE_S:-18000}"  # 5h: on battery with a kickoff
+                                                # this close and nothing in scope pages
+                                                # (#50). Not the 4h horizon: the lost
+                                                # match's Mac slept 4h12m out.
 
 STALE_CLOSE_OUT_S="${STALE_CLOSE_OUT_S:-93600}" # 26h: a day plus slack, so one late
                                                 # or slow run does not fire it, and a
@@ -215,6 +223,10 @@ GAP_FILE="$STATE_DIR/heartbeat.gap"             # endedAt of the last gap report
 mkdir -p "$STATE_DIR"
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+hm() { # $1 = seconds → "4h12m", or "12m" under an hour
+  if (( $1 >= 3600 )); then printf '%dh%02dm' $(( $1 / 3600 )) $(( $1 % 3600 / 60 ))
+  else printf '%dm' $(( $1 / 60 )); fi
+}
 
 # --- ntfy config: decrypt straight into vars, no echo, no temp file ---
 NTFY_ENABLED="${NTFY_ENABLED:-}"; NTFY_TOPIC="${NTFY_TOPIC:-}"
@@ -314,6 +326,17 @@ if [[ -n "$capture_body" ]] && printf '%s' "$capture_body" | jq -e . >/dev/null 
   gap_markets=$(printf '%s' "$capture_body" | jq -r '.components.captureCoverage.details.gapInPlay.markets // empty')
   gap_live=$(printf '%s' "$capture_body" | jq -r '.components.captureCoverage.details.gapInPlay.live // empty')
 
+  # The forward lookahead, for the battery-before-scope probe below (#50). No
+  # `// empty` on the booleans: jq's alternative treats false as absent, and
+  # `known: false` is exactly the value that must be read as itself.
+  look_known=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.known')
+  look_stale=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.stale')
+  look_kickoff=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.nextKickoff // empty')
+  look_to_kickoff=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.secondsToNextKickoff // empty')
+  look_to_scope=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.secondsUntilScopeOpens // empty')
+  look_failures=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.consecutiveFailures // 0')
+  look_age=$(printf '%s' "$capture_body" | jq -r '.components.scope.details.lookahead.measuredSecondsAgo // empty')
+
   # READ the verdict, do not re-derive it. `.details.reason` is a sentence the
   # app writes for exactly this reader, and it is the half that was missing: a
   # #171-shape crashloop cycles through RECORDING every few seconds, so a probe
@@ -397,9 +420,14 @@ fi
 # same reason it needs checking out here — the app is in a Linux container and
 # cannot see host power — so this can only ever alert. If power is ever made a
 # contributor, re-read the restart gate before doing it.
+# Absence of pmset is not a finding — it means this is not the deployed shape.
+on_battery=""
+if command -v pmset >/dev/null && pmset -g batt 2>/dev/null | grep -q "Battery Power"; then
+  on_battery=1
+fi
+
 if [[ -n "$in_scope" && "$in_scope" -gt 0 ]] && command -v pmset >/dev/null; then
-  # Absence of pmset is not a finding — it means this is not the deployed shape.
-  if pmset -g batt 2>/dev/null | grep -q "Battery Power"; then
+  if [[ -n "$on_battery" ]]; then
     add_status "ON-BATTERY"
     add_detail "on battery with $in_scope market(s) in scope — caffeinate -s is void off AC, so keep-awake cannot hold this machine; plug it in"
   fi
@@ -416,6 +444,53 @@ if [[ -n "$in_scope" && "$in_scope" -gt 0 ]] && command -v pmset >/dev/null; the
   if [[ "${awake:-0}" -eq 0 ]]; then
     add_status "MAY-SLEEP"
     add_detail "nothing holds a sleep-preventing assertion with $in_scope market(s) in scope — keep-awake is not holding, and any menu-bar app is not asserting either"
+  fi
+fi
+
+# --- probe 4b: on battery with a card coming and nothing in scope yet (#50) ---
+# The gap probe 4 leaves. A Mac that sleeps on battery BEFORE scope opens never
+# gets a market into scope, so nothing above ever has anything to say: on
+# 2026-09-28 it slept 4h12m before an 18:30Z kickoff and the first signal was the
+# next morning's coverage audit reporting the match MISSED. On battery no power
+# assertion holds against maintenance sleep or a closed lid, so the only defence
+# is being on AC before scope opens — and the page is worth sending while that is
+# still a choice.
+#
+# 5 HOURS, NOT THE 4h SCOPE HORIZON, AND NOT 3: the true case slept 4h12m out.
+# Replayed over a week of power log (#50) this fired in 4 episodes on 3 days,
+# two of them mornings that were plugged in later; nothing in that history
+# separates true from false, so expect a "plug in" page on a matchday morning
+# that starts on battery. Re-count after a few weeks.
+#
+# A LOOKAHEAD THAT IS UNKNOWN OR STALE NEITHER FIRES NOR CLEARS. It goes stale
+# exactly when the Mac has been asleep, so a wake on battery after a page is the
+# pass most likely to read as "recovered" — the status is HELD instead, and with
+# no page outstanding the uncertainty is named in the detail rather than paged.
+#
+# NOT wired to the restart, for probe 4's reason: a restart cannot plug anything in.
+if [[ -n "$on_battery" && "$in_scope" == "0" ]]; then
+  prev_status=$(cat "$STATE_FILE" 2>/dev/null || echo "OK")
+  if [[ "$look_known" != "true" || "$look_stale" != "false" ]]; then
+    if [[ "$look_known" != "true" ]]; then
+      look_word="unavailable (${look_failures} failed poll(s))"
+    else
+      look_word="stale (measured ${look_age:-?}s ago)"
+    fi
+    if [[ "+$prev_status+" == *"+BATTERY-BEFORE-SCOPE+"* ]]; then
+      add_status "BATTERY-BEFORE-SCOPE"
+      add_detail "still on battery with nothing in scope; the kickoff lookahead is $look_word, so the earlier page stands until AC or scope"
+    else
+      add_detail "on battery with nothing in scope, and the kickoff lookahead is $look_word — cannot say whether a card is near"
+    fi
+  elif [[ -n "$look_to_kickoff" ]] && (( look_to_kickoff > 0 && look_to_kickoff <= BATTERY_BEFORE_SCOPE_S )); then
+    to_scope="${look_to_scope:-0}"
+    if (( to_scope > 0 )); then
+      opens="scope opens in $(hm "$to_scope")"
+    else
+      opens="scope is already open"
+    fi
+    add_status "BATTERY-BEFORE-SCOPE"
+    add_detail "on battery with nothing in scope and a target kickoff $look_kickoff in $(hm "$look_to_kickoff"); $opens — plug in now: a sleep before then loses the card, and no in-scope alert will fire"
   fi
 fi
 
