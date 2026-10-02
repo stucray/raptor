@@ -2,6 +2,7 @@ package com.stucray.raptor.betfair;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -41,6 +42,28 @@ class BetfairRest {
 
 	/** POST a filter to one endpoint and read back its list. */
 	<T> List<T> post(String endpoint, Object request, ParameterizedTypeReference<List<T>> type) {
+		return exchange(endpoint, request, response -> {
+			List<T> body = response.bodyTo(type);
+			return body == null ? List.<T>of() : body;
+		});
+	}
+
+	/**
+	 * POST a filter and read back the body as the text Betfair sent (#42).
+	 *
+	 * <p>For a response that is STORED rather than read: decoding it into Java
+	 * values and encoding it again could re-spell a number ({@code 1.10} as
+	 * {@code 1.1}), and then the stored value is raptor's rendering, not Betfair's.
+	 */
+	String postForText(String endpoint, Object request) {
+		return exchange(endpoint, request, response -> {
+			String body = response.bodyTo(String.class);
+			return body == null ? "" : body;
+		});
+	}
+
+	private <T> T exchange(String endpoint, Object request,
+			Function<RestClient.RequestHeadersSpec.ConvertibleClientHttpResponse, T> read) {
 		return client.post()
 				.uri(endpoint)
 				.header("X-Application", properties.appKey())
@@ -63,8 +86,7 @@ class BetfairRest {
 						String body = response.bodyTo(String.class);
 						throw refusal(endpoint, status, body == null ? "" : body);
 					}
-					List<T> body = response.bodyTo(type);
-					return body == null ? List.of() : body;
+					return read.apply(response);
 				});
 	}
 

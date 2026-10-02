@@ -1,0 +1,368 @@
+[
+  {
+    "competition": {
+      "id": "9000104",
+      "name": "English Premier League"
+    },
+    "description": {
+      "betDelayModels": [
+        "PASSIVE"
+      ],
+      "bettingType": "ODDS",
+      "bspMarket": false,
+      "discountAllowed": false,
+      "marketBaseRate": 6.0,
+      "marketTime": "2026-09-02T18:45:00.000Z",
+      "marketType": "MATCH_ODDS",
+      "persistenceEnabled": true,
+      "priceLadderDescription": {
+        "type": "CLASSIC"
+      },
+      "regulator": "MALTA LOTTERIES AND GAMBLING AUTHORITY",
+      "rules": "<!--Football - Match Odds --><br>Synthetic rules text (#304).<br>\n",
+      "rulesHasDate": true,
+      "suspendTime": "2026-09-02T18:45:00.000Z",
+      "turnInPlayEnabled": true,
+      "wallet": "UK wallet"
+    },
+    "event": {
+      "countryCode": "ES",
+      "id": "99930001",
+      "name": "Ashby Rovers v Colnbrook",
+      "openDate": "2026-09-02T18:45:00.000Z",
+      "timezone": "GMT"
+    },
+    "marketId": "1.900005001",
+    "marketName": "Match Odds",
+    "marketStartTime": "2026-09-02T18:45:00.000Z",
+    "totalMatched": 4210.5,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9100001"
+        },
+        "runnerName": "Ashby Rovers",
+        "selectionId": 9100001,
+        "sortPriority": 1
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9100002"
+        },
+        "runnerName": "Colnbrook",
+        "selectionId": 9100002,
+        "sortPriority": 2
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000003"
+        },
+        "runnerName": "The Draw",
+        "selectionId": 9000003,
+        "sortPriority": 3
+      }
+    ]
+  },
+  {
+    "competition": {
+      "id": "9000104",
+      "name": "English Premier League"
+    },
+    "description": {
+      "betDelayModels": [
+        "PASSIVE"
+      ],
+      "bettingType": "ODDS",
+      "bspMarket": false,
+      "discountAllowed": false,
+      "marketBaseRate": 6.0,
+      "marketTime": "2026-09-02T18:45:00.000Z",
+      "marketType": "OVER_UNDER_35",
+      "persistenceEnabled": true,
+      "priceLadderDescription": {
+        "type": "CLASSIC"
+      },
+      "regulator": "MALTA LOTTERIES AND GAMBLING AUTHORITY",
+      "rules": "<!--Football - Over/Unders --><br>Synthetic rules text (#304).<br>\n",
+      "rulesHasDate": true,
+      "suspendTime": "2026-09-02T18:45:00.000Z",
+      "turnInPlayEnabled": true,
+      "wallet": "UK wallet"
+    },
+    "event": {
+      "countryCode": "ES",
+      "id": "99930001",
+      "name": "Ashby Rovers v Colnbrook",
+      "openDate": "2026-09-02T18:45:00.000Z",
+      "timezone": "GMT"
+    },
+    "marketId": "1.900005002",
+    "marketName": "Over/Under 3.5 Goals",
+    "marketStartTime": "2026-09-02T18:45:00.000Z",
+    "totalMatched": 96.2,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000351"
+        },
+        "runnerName": "Under 3.5 Goals",
+        "selectionId": 9000351,
+        "sortPriority": 1
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000352"
+        },
+        "runnerName": "Over 3.5 Goals",
+        "selectionId": 9000352,
+        "sortPriority": 2
+      }
+    ]
+  },
+  {
+    "competition": {
+      "id": "9000105",
+      "name": "English Sky Bet Championship"
+    },
+    "description": {
+      "betDelayModels": [
+        "PASSIVE"
+      ],
+      "bettingType": "ODDS",
+      "bspMarket": false,
+      "discountAllowed": false,
+      "marketBaseRate": 6.0,
+      "marketTime": "2026-09-02T18:45:00.000Z",
+      "marketType": "MATCH_ODDS",
+      "persistenceEnabled": true,
+      "priceLadderDescription": {
+        "type": "CLASSIC"
+      },
+      "regulator": "MALTA LOTTERIES AND GAMBLING AUTHORITY",
+      "rules": "<!--Football - Match Odds --><br>Synthetic rules text (#304).<br>\n",
+      "rulesHasDate": true,
+      "suspendTime": "2026-09-02T18:45:00.000Z",
+      "turnInPlayEnabled": true,
+      "wallet": "UK wallet"
+    },
+    "event": {
+      "countryCode": "ES",
+      "id": "99930002",
+      "name": "Fenwick v Harrowgate Town",
+      "openDate": "2026-09-02T18:45:00.000Z",
+      "timezone": "GMT"
+    },
+    "marketId": "1.900005011",
+    "marketName": "Match Odds",
+    "marketStartTime": "2026-09-02T18:45:00.000Z",
+    "totalMatched": 1830.75,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9100001"
+        },
+        "runnerName": "Fenwick",
+        "selectionId": 9100001,
+        "sortPriority": 1
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9100002"
+        },
+        "runnerName": "Harrowgate Town",
+        "selectionId": 9100002,
+        "sortPriority": 2
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000003"
+        },
+        "runnerName": "The Draw",
+        "selectionId": 9000003,
+        "sortPriority": 3
+      }
+    ]
+  },
+  {
+    "competition": {
+      "id": "9000105",
+      "name": "English Sky Bet Championship"
+    },
+    "description": {
+      "betDelayModels": [
+        "PASSIVE"
+      ],
+      "bettingType": "ODDS",
+      "bspMarket": false,
+      "discountAllowed": false,
+      "marketBaseRate": 6.0,
+      "marketTime": "2026-09-02T18:45:00.000Z",
+      "marketType": "OVER_UNDER_15",
+      "persistenceEnabled": true,
+      "priceLadderDescription": {
+        "type": "CLASSIC"
+      },
+      "regulator": "MALTA LOTTERIES AND GAMBLING AUTHORITY",
+      "rules": "<!--Football - Over/Unders --><br>Synthetic rules text (#304).<br>\n",
+      "rulesHasDate": true,
+      "suspendTime": "2026-09-02T18:45:00.000Z",
+      "turnInPlayEnabled": true,
+      "wallet": "UK wallet"
+    },
+    "event": {
+      "countryCode": "ES",
+      "id": "99930002",
+      "name": "Fenwick v Harrowgate Town",
+      "openDate": "2026-09-02T18:45:00.000Z",
+      "timezone": "GMT"
+    },
+    "marketId": "1.900005012",
+    "marketName": "Over/Under 1.5 Goals",
+    "marketStartTime": "2026-09-02T18:45:00.000Z",
+    "totalMatched": 88.4,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000151"
+        },
+        "runnerName": "Under 1.5 Goals",
+        "selectionId": 9000151,
+        "sortPriority": 1
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000152"
+        },
+        "runnerName": "Over 1.5 Goals",
+        "selectionId": 9000152,
+        "sortPriority": 2
+      }
+    ]
+  },
+  {
+    "competition": {
+      "id": "9000105",
+      "name": "English Sky Bet Championship"
+    },
+    "description": {
+      "betDelayModels": [
+        "PASSIVE"
+      ],
+      "bettingType": "ODDS",
+      "bspMarket": false,
+      "discountAllowed": false,
+      "marketBaseRate": 6.0,
+      "marketTime": "2026-09-02T18:45:00.000Z",
+      "marketType": "OVER_UNDER_25",
+      "persistenceEnabled": true,
+      "priceLadderDescription": {
+        "type": "CLASSIC"
+      },
+      "regulator": "MALTA LOTTERIES AND GAMBLING AUTHORITY",
+      "rules": "<!--Football - Over/Unders --><br>Synthetic rules text (#304).<br>\n",
+      "rulesHasDate": true,
+      "suspendTime": "2026-09-02T18:45:00.000Z",
+      "turnInPlayEnabled": true,
+      "wallet": "UK wallet"
+    },
+    "event": {
+      "countryCode": "ES",
+      "id": "99930002",
+      "name": "Fenwick v Harrowgate Town",
+      "openDate": "2026-09-02T18:45:00.000Z",
+      "timezone": "GMT"
+    },
+    "marketId": "1.900005013",
+    "marketName": "Over/Under 2.5 Goals",
+    "marketStartTime": "2026-09-02T18:45:00.000Z",
+    "totalMatched": 240.1,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000251"
+        },
+        "runnerName": "Under 2.5 Goals",
+        "selectionId": 9000251,
+        "sortPriority": 1
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000252"
+        },
+        "runnerName": "Over 2.5 Goals",
+        "selectionId": 9000252,
+        "sortPriority": 2
+      }
+    ]
+  },
+  {
+    "competition": {
+      "id": "9000105",
+      "name": "English Sky Bet Championship"
+    },
+    "description": {
+      "betDelayModels": [
+        "PASSIVE"
+      ],
+      "bettingType": "ODDS",
+      "bspMarket": false,
+      "discountAllowed": false,
+      "marketBaseRate": 6.0,
+      "marketTime": "2026-09-02T18:45:00.000Z",
+      "marketType": "OVER_UNDER_35",
+      "persistenceEnabled": true,
+      "priceLadderDescription": {
+        "type": "CLASSIC"
+      },
+      "regulator": "MALTA LOTTERIES AND GAMBLING AUTHORITY",
+      "rules": "<!--Football - Over/Unders --><br>Synthetic rules text (#304).<br>\n",
+      "rulesHasDate": true,
+      "suspendTime": "2026-09-02T18:45:00.000Z",
+      "turnInPlayEnabled": true,
+      "wallet": "UK wallet"
+    },
+    "event": {
+      "countryCode": "ES",
+      "id": "99930002",
+      "name": "Fenwick v Harrowgate Town",
+      "openDate": "2026-09-02T18:45:00.000Z",
+      "timezone": "GMT"
+    },
+    "marketId": "1.900005014",
+    "marketName": "Over/Under 3.5 Goals",
+    "marketStartTime": "2026-09-02T18:45:00.000Z",
+    "totalMatched": 61.9,
+    "runners": [
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000351"
+        },
+        "runnerName": "Under 3.5 Goals",
+        "selectionId": 9000351,
+        "sortPriority": 1
+      },
+      {
+        "handicap": 0.0,
+        "metadata": {
+          "runnerId": "9000352"
+        },
+        "runnerName": "Over 3.5 Goals",
+        "selectionId": 9000352,
+        "sortPriority": 2
+      }
+    ]
+  }
+]

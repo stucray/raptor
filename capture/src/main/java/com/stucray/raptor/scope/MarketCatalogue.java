@@ -94,6 +94,27 @@ public interface MarketCatalogue {
 	List<MarketState> follow(Collection<String> marketIds);
 
 	/**
+	 * Each market's catalogue entry, asked for by id, exactly as the upstream sent
+	 * it (#42).
+	 *
+	 * <p>The entry is the one place Betfair says what each runner IS: its name,
+	 * and for some sports a great deal more. The stream carries only a runner's
+	 * id, and the catalogue stops answering for a market once it closes, so an
+	 * entry not fetched while the market is listed is lost for good.
+	 *
+	 * <p><b>Separate from {@link #poll}, and never a reason for it to fail.</b>
+	 * Discovery decides what is captured; this only describes what already is.
+	 * A request that fails costs that request's markets, and is logged; the
+	 * others are still returned.
+	 *
+	 * @param marketIds the markets in scope
+	 * @return the upstream's response bodies, verbatim: one JSON array per
+	 *     request, each element one market's entry. A market the upstream does not
+	 *     answer for is simply missing.
+	 */
+	List<String> entries(Collection<String> marketIds);
+
+	/**
 	 * How the configured competition names fared on the most recent {@link #poll}.
 	 *
 	 * <p>On the port rather than on a {@link CatalogueQuery} because the worst

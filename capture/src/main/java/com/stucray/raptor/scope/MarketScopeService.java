@@ -65,6 +65,7 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 
 	private final ObjectProvider<MarketCatalogue> catalogues;
 	private final MarketScopes scopes;
+	private final CatalogueEntries entries;
 	private final SubscriptionPlanner planner;
 	private final PowerAssertion power;
 	private final ScopeProperties properties;
@@ -101,10 +102,11 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 	private volatile @Nullable Instant scopeNonEmptySince;
 
 	MarketScopeService(ObjectProvider<MarketCatalogue> catalogues, MarketScopes scopes,
-			SubscriptionPlanner planner, PowerAssertion power, ScopeProperties properties,
-			Clock clock, MeterRegistry meters) {
+			CatalogueEntries entries, SubscriptionPlanner planner, PowerAssertion power,
+			ScopeProperties properties, Clock clock, MeterRegistry meters) {
 		this.catalogues = catalogues;
 		this.scopes = scopes;
+		this.entries = entries;
 		this.planner = planner;
 		this.power = power;
 		this.properties = properties;
@@ -236,7 +238,35 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 		// because in-play is decided here: a match in progress is precisely the
 		// interval during which a sleeping machine costs book.
 		power.covering(inPlay);
+		keepEntries(catalogue, open);
 		return open;
+	}
+
+	/**
+	 * Keep each in-scope market's catalogue entry (#42).
+	 *
+	 * <p>Last, and caught: everything above decides what is captured, and this
+	 * only describes it. Whatever fails here costs this poll's entries and
+	 * nothing else, and the next poll asks again. Each response is stored on its
+	 * own, so one that fails does not take the others with it.
+	 */
+	private void keepEntries(MarketCatalogue catalogue, List<ScopedMarket> open) {
+		if (open.isEmpty()) {
+			return;
+		}
+		try {
+			int written = 0;
+			for (String response : catalogue.entries(
+					open.stream().map(ScopedMarket::marketId).toList())) {
+				written += entries.record(response, clock.instant());
+			}
+			if (written > 0) {
+				log.info("kept the catalogue entries of {} market(s)", written);
+			}
+		} catch (RuntimeException e) {
+			log.warn("catalogue entries not kept this poll; retrying on the next ({})",
+					e.toString());
+		}
 	}
 
 	/**
