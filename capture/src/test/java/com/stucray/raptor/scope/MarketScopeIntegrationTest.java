@@ -103,14 +103,89 @@ class MarketScopeIntegrationTest {
 						select fetched_at from raw.market_catalogue where market_id = '1.1'""")
 				.query(java.time.OffsetDateTime.class).single().toInstant()).isEqualTo(NOW);
 
-		// Asked again on the next poll (the next slice keeps a change), and nothing
-		// new is written for an entry already kept.
+		// Asked again on the next poll, and an entry that has not changed writes
+		// nothing.
 		clock.now = NOW.plus(Duration.ofMinutes(15));
 		service.refresh();
 
 		assertThat(catalogue.entriesAsked).hasSize(2)
 				.allSatisfy(ids -> assertThat(ids).containsExactlyInAnyOrder("1.1", "1.2"));
 		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 1L), Map.entry("1.2", 1L));
+	}
+
+	/**
+	 * #43: a change Betfair makes to an entry is a new row, and the old one stays.
+	 * A runner removed, a runner renamed, a start time moved: each is something
+	 * the source said, and overwriting it would lose it.
+	 */
+	@Test
+	void aChangedEntryIsANewRowBesideTheOld() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.entry("1.1", entry("1.1"));
+		service.refresh();
+
+		List<String> changes = List.of(
+				// A runner renamed.
+				entry("1.1", List.of(runner(9100001, "Home", 1), runner(9100002, "Away FC", 2)), null),
+				// A runner removed.
+				entry("1.1", List.of(runner(9100001, "Home", 1)), null),
+				// A start time stated.
+				entry("1.1", List.of(runner(9100001, "Home", 1)), "2026-09-05T14:15:00.000Z"));
+		for (int i = 0; i < changes.size(); i++) {
+			assertThat(changes.get(i)).as("change %d really changes the entry", i)
+					.isNotEqualTo(entry("1.1"));
+			clock.now = NOW.plus(Duration.ofMinutes(15L * (i + 1)));
+			catalogue.entry("1.1", changes.get(i));
+			service.refresh();
+		}
+
+		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 4L));
+		assertThat(jdbc.sql("""
+						select entry = cast(? as jsonb) from raw.market_catalogue
+						where market_id = '1.1' order by fetched_at""").param(entry("1.1"))
+				.query(Boolean.class).list()).containsExactly(true, false, false, false);
+	}
+
+	/**
+	 * #43: the same entry laid out differently is the same entry. Key order and
+	 * whitespace are how a response is written, not what it says.
+	 */
+	@Test
+	void anEntryLaidOutDifferentlyIsTheSameEntry() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.entry("1.1", entry("1.1"));
+		service.refresh();
+
+		clock.now = NOW.plus(Duration.ofMinutes(15));
+		catalogue.entry("1.1", """
+				{  "runners":[{"metadata":{"runnerId":"9100001"},"handicap":0.0,"sortPriority":1,
+				"runnerName":"Home","selectionId":9100001},{"metadata":{"runnerId":"9100002"},
+				"handicap":0.0,"sortPriority":2,"runnerName":"Away","selectionId":9100002}],
+				"description":{"marketBaseRate":1.10,"marketType":"MATCH_ODDS"},
+				"totalMatched":10.5,"marketName":"Match Odds","marketId":"1.1"}""");
+		service.refresh();
+
+		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 1L));
+	}
+
+	/**
+	 * #43: "unchanged" is what the table says, not what a running instance
+	 * remembers. A store made fresh, as after a restart, compares against the
+	 * row the previous one wrote, and back again to an earlier entry is a change.
+	 */
+	@Test
+	void unchangedIsDecidedByWhatIsStored() {
+		CatalogueEntries first = new CatalogueEntries(jdbc);
+		String original = "[" + entry("1.1") + "]";
+		String renamed = "[" + entry("1.1",
+				List.of(runner(9100001, "Home", 1), runner(9100002, "Away FC", 2)), null) + "]";
+		assertThat(first.record(original, NOW)).isOne();
+
+		CatalogueEntries afterRestart = new CatalogueEntries(jdbc);
+		assertThat(afterRestart.record(original, NOW.plusSeconds(900))).isZero();
+		assertThat(afterRestart.record(renamed, NOW.plusSeconds(1800))).isOne();
+		assertThat(afterRestart.record(original, NOW.plusSeconds(2700))).isOne();
+		assertThat(entryCounts()).containsOnly(Map.entry("1.1", 3L));
 	}
 
 	/**
@@ -726,14 +801,23 @@ class MarketScopeIntegrationTest {
 
 	/** A market's entry in the shape of {@code list-market-catalogue-by-id.json}. */
 	private static String entry(String marketId) {
+		return entry(marketId, List.of(runner(9100001, "Home", 1), runner(9100002, "Away", 2)), null);
+	}
+
+	private static String entry(String marketId, List<String> runners, @Nullable String startTime) {
 		return """
-				{"marketId": "%s", "marketName": "Match Odds", "totalMatched": 10.5,
+				{"marketId": "%s", "marketName": "Match Odds", "totalMatched": 10.5,%s
 				 "description": {"marketType": "MATCH_ODDS", "marketBaseRate": 1.10},
-				 "runners": [
-				  {"selectionId": 9100001, "runnerName": "Home", "sortPriority": 1,
-				   "handicap": 0.0, "metadata": {"runnerId": "9100001"}},
-				  {"selectionId": 9100002, "runnerName": "Away", "sortPriority": 2,
-				   "handicap": 0.0, "metadata": {"runnerId": "9100002"}}]}""".formatted(marketId);
+				 "runners": [%s]}""".formatted(marketId,
+				startTime == null ? "" : " \"marketStartTime\": \"" + startTime + "\",",
+				String.join(", ", runners));
+	}
+
+	private static String runner(long selectionId, String name, int sortPriority) {
+		return """
+				{"selectionId": %d, "runnerName": "%s", "sortPriority": %d,
+				 "handicap": 0.0, "metadata": {"runnerId": "%d"}}""".formatted(selectionId, name,
+				sortPriority, selectionId);
 	}
 
 	private boolean requested(String marketId) {
