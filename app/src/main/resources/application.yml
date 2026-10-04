@@ -232,7 +232,11 @@ raptor:
     # tie and a 12:30Z Saturday kickoff are both covered without subscribing to
     # the hours between them — and a short-notice reschedule is picked up on the
     # next poll instead of missed.
-    horizon: ${RAPTOR_SCOPE_HORIZON:4h}
+    # Two hours since #52: the last two hours hold most of the pre-kickoff
+    # book (64% of the money matched before kickoff, 81% of the messages), and
+    # this is also how long before a card the host must be awake. Measured, not
+    # inherited; see ScopeProperties.
+    horizon: ${RAPTOR_SCOPE_HORIZON:2h}
     # Deliberately the 900s of record_suspensions.py's ID_REFRESH_S: a cadence
     # already exercised against Betfair's rate limits over a season.
     poll-interval: ${RAPTOR_SCOPE_POLL_INTERVAL:15m}

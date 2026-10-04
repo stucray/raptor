@@ -24,8 +24,8 @@
          The UTC figure is the one that matters, and getting that wrong is how
          the backup first shipped firing at 20:30Z, mid-card. 06:11Z is after
          the previous day's football has finished (last kickoffs 19:00Z, done
-         by ~21:00Z) and before scope opens for the next (4h horizon, earliest
-         observed kickoff 11:00Z, so ~07:00Z). Measured end-to-end at about two
+         by ~21:00Z) and before scope opens for the next (2h horizon since #52,
+         earliest observed kickoff 10:30Z, so ~08:30Z). Measured end-to-end at about two
          minutes, so it clears that window with an hour to spare.
 
          Weekly, not nightly: the drill stands up a second Postgres and restores

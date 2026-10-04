@@ -196,7 +196,7 @@ RESTART_COOLDOWN_S="${RESTART_COOLDOWN_S:-21600}"  # 6h: longer than a card. One
 
 BATTERY_BEFORE_SCOPE_S="${BATTERY_BEFORE_SCOPE_S:-18000}"  # 5h: on battery with a kickoff
                                                 # this close and nothing in scope pages
-                                                # (#50). Not the 4h horizon: the lost
+                                                # (#50). Not the scope horizon: the lost
                                                 # match's Mac slept 4h12m out.
 
 STALE_CLOSE_OUT_S="${STALE_CLOSE_OUT_S:-93600}" # 26h: a day plus slack, so one late
@@ -456,7 +456,9 @@ fi
 # is being on AC before scope opens — and the page is worth sending while that is
 # still a choice.
 #
-# 5 HOURS, NOT THE 4h SCOPE HORIZON, AND NOT 3: the true case slept 4h12m out.
+# 5 HOURS, NOT THE SCOPE HORIZON (4h then, 2h since #52), AND NOT 3: the true
+# case slept 4h12m out, and a Mac asleep before scope opens loses the card
+# however short the horizon is.
 # Replayed over a week of power log (#50) this fired in 4 episodes on 3 days,
 # two of them mornings that were plugged in later; nothing in that history
 # separates true from false, so expect a "plug in" page on a matchday morning

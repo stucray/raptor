@@ -270,8 +270,8 @@
       "class": "ScopeProperties",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
-      "begin_line": 75,
-      "end_line": 75,
+      "begin_line": 80,
+      "end_line": 80,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
