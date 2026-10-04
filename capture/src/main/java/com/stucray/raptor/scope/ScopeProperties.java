@@ -7,9 +7,14 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * The dials that replace the capture window.
  *
- * @param horizon how far ahead a kickoff must be to enter scope. Four hours
- *     covers pre-match price formation, which is most of what the corpus is
- *     for, without holding subscription slots all day for an evening fixture.
+ * @param horizon how far ahead a kickoff must be to enter scope. Two hours
+ *     since #52, measured over every scoped market from 2026-09-02 to 10-03:
+ *     the last two hours before kickoff hold 64% of the money matched before
+ *     kickoff and 81% of its stream messages, while 4h-to-2h held about 2% of
+ *     all money matched on a market. In play is 76% of the money and 88% of the
+ *     messages whatever this is. It is also how long before a card the host
+ *     must be awake with its lid open, which is the cost being traded. Four
+ *     hours, inherited from paddock #91, was never measured.
  * @param pollInterval how often to re-read the catalogue. Deliberately the 900 s
  *     of {@code record_suspensions.py}'s {@code ID_REFRESH_S} — a value already
  *     exercised against Betfair's rate limits over a season, and this slice is
@@ -49,7 +54,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties("raptor.scope")
 public record ScopeProperties(
-		@DefaultValue("4h") Duration horizon,
+		@DefaultValue("2h") Duration horizon,
 		@DefaultValue("15m") Duration pollInterval,
 		@DefaultValue("10s") Duration initialPollDelay,
 		@DefaultValue("130m") Duration inPlayTimeout,

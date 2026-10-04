@@ -17,8 +17,8 @@ import org.springframework.stereotype.Component;
  * <p>Capture runs on a laptop that gets carried around, and the mitigation for
  * that is behavioural: shut the lid only when nothing is in scope.
  * {@code scope.marketsInScope} supports the check well and supports the
- * <em>plan</em> not at all, because a fixture enters scope four hours before
- * kickoff and paddock knows nothing about it until it does. So "is it safe
+ * <em>plan</em> not at all, because a fixture enters scope only a horizon before
+ * kickoff (two hours since #52) and raptor knows nothing about it until it does. So "is it safe
  * now?" could be asked and "can I go out for three hours?" could not — the
  * wrong shape for an operator who is usually away before kickoff (#265).
  *

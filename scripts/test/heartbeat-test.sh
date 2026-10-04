@@ -417,7 +417,7 @@ lookahead_json() { # $1 = marketsInScope  $2 = known  $3 = stale
                    # $4 = secondsToNextKickoff ("" = no kickoff in the window)
   local look="{\"known\":$2,\"stale\":$3,\"windowSeconds\":172800,\"consecutiveFailures\":0,\"measuredSecondsAgo\":120"
   if [[ -n "${4:-}" ]]; then
-    look="$look,\"nextKickoff\":\"2026-09-28T18:30:00Z\",\"secondsToNextKickoff\":$4,\"secondsUntilScopeOpens\":$(( $4 > 14400 ? $4 - 14400 : 0 ))"
+    look="$look,\"nextKickoff\":\"2026-09-28T18:30:00Z\",\"secondsToNextKickoff\":$4,\"secondsUntilScopeOpens\":$(( $4 > 7200 ? $4 - 7200 : 0 ))"
   fi
   capture_json 3600 UP 2026-09-07T23:31:21Z COMPLETED COMPLETED \
     | jq -c --argjson n "$1" --argjson look "$look}" \
@@ -443,7 +443,7 @@ expect_status "$out" BATTERY-BEFORE-SCOPE
 grep -q "kickoff 2026-09-28T18:30:00Z in 4h12m" "$work/sent.log" \
   || fail "the page should name the kickoff and how far off it is: $(cat "$work/sent.log")"
 pass
-grep -q "scope opens in 12m" "$work/sent.log" \
+grep -q "scope opens in 2h12m" "$work/sent.log" \
   || fail "the page should say when scope opens: $(cat "$work/sent.log")"
 pass
 out=$(run); out=$(run)
