@@ -198,28 +198,13 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 			// to poll, so nothing in scope, and no pretence otherwise.
 			return scopes.open();
 		}
-		// One market can arrive from BOTH queries, and routinely does: the control
-		// set is a country filter, and a requested league's markets are in that
-		// country too. Upserting each sighting as it arrives would let the control
-		// query overwrite `requested` to false moments after the league query set
-		// it true — and the planner's whole first rule is that the control set may
-		// never crowd out a requested league. So the poll is folded first, and
-		// requested wins wherever the two disagree.
-		Map<String, CatalogueMarket> markets = new LinkedHashMap<>();
-		Set<String> requested = new HashSet<>();
-		for (MarketCatalogue.CatalogueQuery query : catalogue.poll(properties.horizon())) {
-			for (CatalogueMarket market : query.markets()) {
-				markets.putIfAbsent(market.marketId(), market);
-				if (query.requested()) {
-					requested.add(market.marketId());
-				}
-			}
-		}
-		Set<String> seen = new HashSet<>(markets.keySet());
-		for (CatalogueMarket market : markets.values()) {
-			scopes.seen(market, requested.contains(market.marketId()));
+		Folded discovered = Folded.of(catalogue.poll(properties.horizon()));
+		Set<String> seen = new HashSet<>(discovered.markets().keySet());
+		for (CatalogueMarket market : discovered.markets().values()) {
+			scopes.seen(market, discovered.requested().contains(market.marketId()));
 			apply(market.marketId(), market.inPlay(), market.status());
 		}
+		seen.addAll(admitStarted(catalogue, seen));
 		Set<String> answered = follow(catalogue, seen);
 		retire(seen, answered);
 		List<ScopedMarket> open = scopes.open();
@@ -240,6 +225,77 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 		power.covering(inPlay);
 		keepEntries(catalogue, open);
 		return open;
+	}
+
+	/**
+	 * Take on the target markets that kicked off before any poll saw them (#57).
+	 *
+	 * <p>Discovery's window starts at now, so without this a fixture is captured
+	 * only if some poll succeeds between Betfair listing it and its kickoff. A
+	 * host asleep across that window, or a fixture rescheduled at short notice,
+	 * then loses the whole match even though raptor is running for most of it.
+	 * Kickoff time is no barrier to following a market raptor <b>has never
+	 * seen</b>. A market it already knows, in any state, is left exactly as it
+	 * is: not counted as seen here, so it takes the {@link #follow} route it
+	 * would have taken anyway, and never revived, so the ledger keeps when each
+	 * retired market really left scope.
+	 *
+	 * <p>Caught, like {@link #keepEntries}: this only adds to what discovery
+	 * found, so a failure here costs this poll's late entries and nothing else,
+	 * and the next poll asks again.
+	 *
+	 * @param discovered the markets the forward poll has already handled
+	 * @return the markets that entered scope here, which this poll's catalogue
+	 *     and book have just answered for
+	 */
+	private Set<String> admitStarted(MarketCatalogue catalogue, Set<String> discovered) {
+		try {
+			Folded started = Folded.of(catalogue.started(properties.lateLookback()));
+			Set<String> admitted = new HashSet<>();
+			for (CatalogueMarket market : started.markets().values()) {
+				if (discovered.contains(market.marketId())
+						|| !scopes.admitStarted(market, started.requested().contains(market.marketId()))) {
+					continue;
+				}
+				admitted.add(market.marketId());
+				apply(market.marketId(), market.inPlay(), market.status());
+				log.info("market {} entered scope after its kickoff at {}; capturing from now",
+						market.marketId(), market.kickoff());
+			}
+			return admitted;
+		} catch (RuntimeException e) {
+			log.warn("markets that kicked off unseen were not looked for this poll; retrying on "
+					+ "the next ({})", e.toString());
+			return Set.of();
+		}
+	}
+
+	/**
+	 * One poll's queries, unioned by market.
+	 *
+	 * <p>One market can arrive from BOTH queries, and routinely does: the control
+	 * set is a country filter, and a requested league's markets are in that
+	 * country too. Recording each sighting as it arrives would let the control
+	 * query overwrite {@code requested} to false moments after the league query
+	 * set it true — and the planner's whole first rule is that the control set
+	 * may never crowd out a requested league. So the queries are folded first,
+	 * and requested wins wherever the two disagree.
+	 */
+	private record Folded(Map<String, CatalogueMarket> markets, Set<String> requested) {
+
+		static Folded of(List<MarketCatalogue.CatalogueQuery> queries) {
+			Map<String, CatalogueMarket> markets = new LinkedHashMap<>();
+			Set<String> requested = new HashSet<>();
+			for (MarketCatalogue.CatalogueQuery query : queries) {
+				for (CatalogueMarket market : query.markets()) {
+					markets.putIfAbsent(market.marketId(), market);
+					if (query.requested()) {
+						requested.add(market.marketId());
+					}
+				}
+			}
+			return new Folded(markets, requested);
+		}
 	}
 
 	/**

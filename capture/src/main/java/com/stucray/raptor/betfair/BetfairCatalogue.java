@@ -103,25 +103,51 @@ class BetfairCatalogue implements MarketCatalogue {
 		if (asked.isEmpty()) {
 			return List.of();
 		}
-		Map<String, String> window = window(horizon);
-		List<CatalogueQuery> queries = new ArrayList<>();
-
+		Instant now = clock.instant();
 		Resolved resolved = resolve(asked.leagues());
-		// Published here and not inside resolve(), because the lookahead query
-		// below resolves the same names on its own schedule and must not overwrite
-		// what `resolution()` is documented to mean: the last DISCOVERY poll.
+		// Published here and not inside resolve(), because the lookahead and the
+		// already-started query resolve the same names on their own and must not
+		// overwrite what `resolution()` is documented to mean: the last DISCOVERY
+		// poll.
 		this.resolution = new LeagueResolution(asked.leagues().size(), resolved.noOpenMarkets(),
 				resolved.ambiguous());
 		report(resolved, asked.leagues().size());
-		List<String> competitionIds = resolved.ids();
+		return queries(asked, resolved.ids(), window(now, now.plus(horizon)),
+				Origin.REQUESTED, Origin.CONTROL);
+	}
+
+	/**
+	 * The same two queries as {@link #poll}, over the window behind now (#57).
+	 *
+	 * <p>Quiet about credentials and about the leagues, because {@code poll} runs
+	 * first on the same schedule and has already said both.
+	 */
+	@Override
+	public List<CatalogueQuery> started(Duration lookback) {
+		if (!properties.configured()) {
+			return List.of();
+		}
+		CaptureSelection.Selection asked = selection.current();
+		if (asked.isEmpty()) {
+			return List.of();
+		}
+		Instant now = clock.instant();
+		return queries(asked, resolve(asked.leagues()).ids(), window(now.minus(lookback), now),
+				Origin.REQUESTED_STARTED, Origin.CONTROL_STARTED);
+	}
+
+	private List<CatalogueQuery> queries(CaptureSelection.Selection asked,
+			List<String> competitionIds, Map<String, String> window, Origin requested,
+			Origin control) {
+		List<CatalogueQuery> queries = new ArrayList<>();
 		if (!competitionIds.isEmpty()) {
 			queries.add(new CatalogueQuery(true,
-					markets(Origin.REQUESTED, Map.of("competitionIds", competitionIds),
+					markets(requested, Map.of("competitionIds", competitionIds),
 							asked.marketTypes(), window)));
 		}
 		if (!asked.controlCountries().isEmpty()) {
 			queries.add(new CatalogueQuery(false,
-					markets(Origin.CONTROL, Map.of("marketCountries", asked.controlCountries()),
+					markets(control, Map.of("marketCountries", asked.controlCountries()),
 							asked.marketTypes(), window)));
 		}
 		return queries;
@@ -361,7 +387,12 @@ class BetfairCatalogue implements MarketCatalogue {
 	private enum Origin {
 
 		REQUESTED("requested competitions", true),
-		CONTROL("control countries", false);
+		CONTROL("control countries", false),
+		// Loud for the same reason as REQUESTED: past the page are target fixtures
+		// that kicked off unseen, and this query is the only one that could find
+		// them (#57).
+		REQUESTED_STARTED("requested competitions already kicked off", true),
+		CONTROL_STARTED("control countries already kicked off", false);
 
 		private final String describe;
 		private final boolean loud;
@@ -395,7 +426,7 @@ class BetfairCatalogue implements MarketCatalogue {
 				log.warn("catalogue query for {} filled the {}-market page — target-league "
 						+ "markets may have been silently lost, and nothing downstream can "
 						+ "report them missing because they were never discovered; narrow the "
-						+ "market types or the horizon", origin.describe, MAX_RESULTS);
+						+ "market types or the window", origin.describe, MAX_RESULTS);
 			} else {
 				log.info("catalogue query for {} filled the {}-market page; the surplus is "
 						+ "filler the planner trims anyway", origin.describe, MAX_RESULTS);
@@ -460,7 +491,11 @@ class BetfairCatalogue implements MarketCatalogue {
 
 	private Map<String, String> window(Duration horizon) {
 		Instant now = clock.instant();
-		return Map.of("from", WINDOW.format(now), "to", WINDOW.format(now.plus(horizon)));
+		return window(now, now.plus(horizon));
+	}
+
+	private static Map<String, String> window(Instant from, Instant to) {
+		return Map.of("from", WINDOW.format(from), "to", WINDOW.format(to));
 	}
 
 	private static Map<?, ?> map(@Nullable Object value) {

@@ -15,6 +15,14 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *     messages whatever this is. It is also how long before a card the host
  *     must be awake with its lid open, which is the cost being traded. Four
  *     hours, inherited from paddock #91, was never measured.
+ * @param lateLookback how far back a kickoff may be for a market discovery has
+ *     never seen to enter scope anyway (#57). Without it a fixture is captured
+ *     only if some poll succeeds between Betfair listing it and its kickoff, so
+ *     a host asleep across that window, or a fixture rescheduled at short
+ *     notice, loses the whole match although raptor is running for most of it.
+ *     Two hours because a market closes about two hours after kickoff: older
+ *     ones have nothing left to capture, and the query shares the catalogue's
+ *     200-market page with every in-play market raptor already follows.
  * @param pollInterval how often to re-read the catalogue. Deliberately the 900 s
  *     of {@code record_suspensions.py}'s {@code ID_REFRESH_S} — a value already
  *     exercised against Betfair's rate limits over a season, and this slice is
@@ -55,6 +63,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties("raptor.scope")
 public record ScopeProperties(
 		@DefaultValue("2h") Duration horizon,
+		@DefaultValue("2h") Duration lateLookback,
 		@DefaultValue("15m") Duration pollInterval,
 		@DefaultValue("10s") Duration initialPollDelay,
 		@DefaultValue("130m") Duration inPlayTimeout,
@@ -67,6 +76,9 @@ public record ScopeProperties(
 	public ScopeProperties {
 		if (horizon.isNegative() || horizon.isZero()) {
 			throw new IllegalArgumentException("the scope horizon must be positive");
+		}
+		if (lateLookback.isNegative()) {
+			throw new IllegalArgumentException("the late-discovery lookback must not be negative");
 		}
 		if (inPlayTimeout.isNegative() || kickoffTimeout.isNegative()) {
 			throw new IllegalArgumentException("scope guards must not be negative");

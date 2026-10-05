@@ -58,6 +58,9 @@ class MarketScopeIntegrationTest {
 		catalogue.entries.clear();
 		catalogue.entriesAsked.clear();
 		catalogue.failEntries = false;
+		catalogue.started.clear();
+		catalogue.startedAsked.clear();
+		catalogue.failStarted = false;
 		// The fake is a context-scoped singleton, so its failure switch outlives
 		// the test that flipped it — reset it here or every later method inherits
 		// an unreachable catalogue.
@@ -637,6 +640,95 @@ class MarketScopeIntegrationTest {
 	}
 
 	/**
+	 * #57: a fixture no poll saw before its kickoff is still a fixture to capture.
+	 *
+	 * <p>Discovery only looks ahead, so a host asleep across a fixture's whole
+	 * pre-kickoff window, or a fixture rescheduled at short notice, used to lose
+	 * the entire match although raptor was running for most of it. Found half an
+	 * hour in, it enters scope, dates its in-play clock from now, and is planned.
+	 */
+	@Test
+	void aMarketFirstSeenAfterItsKickoffEntersScopeAndIsPlanned() {
+		Instant found = KICKOFF.plus(Duration.ofMinutes(30));
+		clock.now = found;
+		catalogue.offerStarted(market("1.1", "e1", KICKOFF, true, "OPEN"));
+
+		service.refresh();
+
+		assertThat(states()).containsEntry("1.1", "PENDING");
+		assertThat(requested("1.1")).isTrue();
+		assertThat(inPlaySince("1.1")).isEqualTo(found);
+		assertThat(service.plan().marketIds()).containsExactly("1.1");
+		// The shipped dial reaches the port: two hours behind now.
+		assertThat(catalogue.startedAsked).containsExactly(Duration.ofHours(2));
+	}
+
+	/**
+	 * #57's rule, asserted where the three cases meet: one poll of the window
+	 * behind now, holding a market never seen, one being recorded, and one the
+	 * in-play guard retired while Betfair still lists it.
+	 *
+	 * <p>The window returns all three, as Betfair's does. Only the first may
+	 * change. The recorded market must not be reset or re-dated. The retired one
+	 * is the subtle case: {@code seen()} would revive it, and the in-play guard
+	 * would retire it again in the same pass, so its state alone cannot tell. Its
+	 * {@code state_changed_at} can: revived, it would move to every poll, and the
+	 * ledger would stop saying when the market really left scope. A version of
+	 * this test that asserted only states passed against exactly that mutation.
+	 */
+	@Test
+	void theWindowBehindNowAddsOnlyWhatScopeHasNeverSeen() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.offer(market("1.2", "e2", KICKOFF, true, "OPEN"));
+		service.refresh();
+		service.subscribed(List.of("1.1", "1.2"));
+
+		// Both kick off and leave the forward window; 1.2's guard runs out.
+		catalogue.markets.clear();
+		catalogue.books("1.1", true, "OPEN");
+		catalogue.books("1.2", true, "OPEN");
+		clock.now = NOW.plus(Duration.ofMinutes(131));
+		service.refresh();
+		assertThat(states()).containsEntry("1.1", "LIVE").containsEntry("1.2", "DONE");
+		Instant recordedSince = stateChangedAt("1.1");
+		Instant retiredAt = stateChangedAt("1.2");
+
+		catalogue.offerStarted(market("1.1", "e1", KICKOFF, true, "OPEN"));
+		catalogue.offerStarted(market("1.2", "e2", KICKOFF, true, "OPEN"));
+		catalogue.offerStarted(market("1.3", "e3", KICKOFF, true, "OPEN"));
+		clock.now = NOW.plus(Duration.ofMinutes(146));
+		service.refresh();
+
+		assertThat(states()).containsEntry("1.1", "LIVE").containsEntry("1.2", "DONE")
+				.containsEntry("1.3", "PENDING");
+		assertThat(stateChangedAt("1.1")).isEqualTo(recordedSince);
+		assertThat(exitReason("1.2")).isEqualTo("IN_PLAY_ELAPSED");
+		assertThat(stateChangedAt("1.2")).isEqualTo(retiredAt);
+		// The recorded market keeps the route it had: followed by id. The new one
+		// was just answered by the catalogue and is not asked about twice.
+		assertThat(catalogue.asked.getLast()).contains("1.1").doesNotContain("1.3");
+		assertThat(service.plan().marketIds()).contains("1.1", "1.3").doesNotContain("1.2");
+	}
+
+	/**
+	 * The window behind now only ever adds, so its failure costs only itself.
+	 *
+	 * <p>Not counted as a failed poll either: the count is what tells an
+	 * unreachable catalogue from a quiet day, and forward discovery, the part that
+	 * decides that, completed.
+	 */
+	@Test
+	void aFailedLookBehindCostsOnlyItsOwnMarkets() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.failStarted = true;
+
+		service.poll();
+
+		assertThat(states()).containsEntry("1.1", "PENDING");
+		assertThat(service.discovery().consecutivePollFailures()).isZero();
+	}
+
+	/**
 	 * A failed poll leaves scope exactly as it was.
 	 *
 	 * <p>The failure modes are not symmetric: a stale scope subscribes a market a
@@ -787,6 +879,11 @@ class MarketScopeIntegrationTest {
 		return states;
 	}
 
+	private Instant stateChangedAt(String marketId) {
+		return jdbc.sql("select state_changed_at from raw.market_scope where market_id = ?")
+				.param(marketId).query(java.time.OffsetDateTime.class).single().toInstant();
+	}
+
 	private @org.jspecify.annotations.Nullable String exitReason(String marketId) {
 		return jdbc.sql("select exit_reason from raw.market_scope where market_id = ?")
 				.param(marketId).query(String.class).optional().orElse(null);
@@ -878,6 +975,30 @@ class MarketScopeIntegrationTest {
 			}
 			return List.of(new CatalogueQuery(true, List.copyOf(markets)),
 					new CatalogueQuery(false, List.copyOf(control)));
+		}
+
+		/**
+		 * What the window behind now holds (#57): requested markets that have
+		 * kicked off, new and known alike, as Betfair's answer would be.
+		 *
+		 * <p>Separate from {@link #markets} because the two are different windows,
+		 * and a market is in at most one of them at a time.
+		 */
+		final List<CatalogueMarket> started = new ArrayList<>();
+		final List<Duration> startedAsked = new ArrayList<>();
+		boolean failStarted;
+
+		void offerStarted(CatalogueMarket market) {
+			started.add(market);
+		}
+
+		@Override
+		public List<CatalogueQuery> started(Duration lookback) {
+			if (fail || failStarted) {
+				throw new IllegalStateException("catalogue unreachable (simulated)");
+			}
+			startedAsked.add(lookback);
+			return List.of(new CatalogueQuery(true, List.copyOf(started)));
 		}
 
 		/**

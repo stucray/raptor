@@ -65,6 +65,37 @@ class MarketScopes {
 				.update();
 	}
 
+	/**
+	 * Enter a market that had already kicked off when discovery first saw it —
+	 * and only if raptor has never seen it at all (#57).
+	 *
+	 * <p><b>Insert or nothing, unlike {@link #seen}.</b> A market already known,
+	 * in any state, is left exactly as it is. One being recorded needs nothing
+	 * from here. One that has left scope must stay out: its kickoff is behind it,
+	 * so it is not the rescheduled fixture {@code seen} revives. Reviving a
+	 * market the in-play guard retired while Betfair still lists it would not
+	 * hold a slot, because the guard retires it again in the same pass, but it
+	 * would rewrite the row on every poll: {@code state_changed_at} would move to
+	 * each one, and the ledger would stop saying when the market left scope.
+	 *
+	 * <p>Lateness needs no column of its own: {@code first_seen_at} after
+	 * {@code kickoff} is what a late entry looks like.
+	 *
+	 * @return true when the market was new and is now in scope
+	 */
+	boolean admitStarted(CatalogueMarket market, boolean requested) {
+		return jdbc.sql("""
+						insert into raw.market_scope (
+								market_id, event_id, event_name, competition_id, competition_name,
+								market_type, country_code, kickoff, requested, state, state_changed_at)
+						values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+						on conflict (market_id) do nothing""")
+				.params(Arrays.asList(market.marketId(), market.eventId(), market.eventName(),
+						market.competitionId(), market.competitionName(), market.marketType(),
+						market.countryCode(), utc(market.kickoff()), requested, now()))
+				.update() == 1;
+	}
+
 	/** Everything still in scope, for the planner and the guards. */
 	List<ScopedMarket> open() {
 		return jdbc.sql("""

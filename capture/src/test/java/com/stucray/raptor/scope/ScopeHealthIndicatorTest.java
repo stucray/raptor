@@ -189,7 +189,8 @@ class ScopeHealthIndicatorTest {
 	}
 
 	private static ScopeProperties scopeProperties() {
-		return new ScopeProperties(java.time.Duration.ofHours(4), java.time.Duration.ofMinutes(15),
+		return new ScopeProperties(java.time.Duration.ofHours(4), java.time.Duration.ofHours(2),
+				java.time.Duration.ofMinutes(15),
 				java.time.Duration.ofSeconds(10), java.time.Duration.ofMinutes(130),
 				java.time.Duration.ofHours(6), java.time.Duration.ofHours(48),
 				java.time.Duration.ofMinutes(30), true, 3);
@@ -212,6 +213,11 @@ class ScopeHealthIndicatorTest {
 
 		@Override
 		public java.util.List<CatalogueQuery> poll(java.time.Duration horizon) {
+			return java.util.List.of();
+		}
+
+		@Override
+		public java.util.List<CatalogueQuery> started(java.time.Duration lookback) {
 			return java.util.List.of();
 		}
 
