@@ -37,6 +37,28 @@ public interface MarketCatalogue {
 	List<CatalogueQuery> poll(Duration horizon);
 
 	/**
+	 * Markets of the captured types that have already kicked off, inside the
+	 * lookback (#57).
+	 *
+	 * <p><b>The other side of {@link #poll}'s window, asked separately.</b>
+	 * {@code poll} only sees a market before its kickoff, so a fixture no poll
+	 * caught in time, because the host slept across its pre-kickoff window or it
+	 * was listed late, was never captured at all. This is what lets scope take it
+	 * on from the moment it is found. It is a separate query and not a widened
+	 * {@code poll}, because both share the catalogue's 200-market page, and
+	 * widening the forward query backwards would let the evening's in-play
+	 * markets crowd tomorrow's fixtures off it.
+	 *
+	 * <p>It returns every match in the window, including the many raptor already
+	 * follows: telling new from known is scope's job, and the only one that can
+	 * do it.
+	 *
+	 * @param lookback how far back a kickoff may be
+	 * @return the markets found, marked requested or control as {@link #poll}'s are
+	 */
+	List<CatalogueQuery> started(Duration lookback);
+
+	/**
 	 * The earliest kickoff that will eventually enter scope, however far off.
 	 *
 	 * <p><b>A different question from {@link #poll}, and deliberately not a

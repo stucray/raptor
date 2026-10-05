@@ -492,7 +492,7 @@ class CaptureCoverageHealthIndicatorTest {
 	}
 
 	private static ScopeProperties scopeProperties() {
-		return new ScopeProperties(Duration.ofHours(4), Duration.ofMinutes(15),
+		return new ScopeProperties(Duration.ofHours(4), Duration.ofHours(2), Duration.ofMinutes(15),
 				Duration.ofSeconds(10), Duration.ofMinutes(130), Duration.ofHours(6),
 				Duration.ofHours(48), Duration.ofMinutes(30), true, 3);
 	}

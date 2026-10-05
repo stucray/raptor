@@ -333,6 +333,69 @@ class BetfairCatalogueTest {
 				.noneSatisfy(message -> assertThat(message).contains("page"));
 	}
 
+	/** Discovery looks ahead from now, and only ahead: #57 leaves it as it was. */
+	@Test
+	void discoveryLooksAheadFromNow() {
+		catalogue.poll(Duration.ofHours(2));
+
+		assertThat(windows()).isNotEmpty().containsOnly(
+				Map.of("from", "2026-09-02T03:52:00Z", "to", "2026-09-02T05:52:00Z"));
+	}
+
+	/**
+	 * #57: the window behind now, asked as its own pair of queries so the
+	 * evening's in-play markets cannot crowd tomorrow's fixtures off the forward
+	 * query's page.
+	 */
+	@Test
+	void theStartedQueryLooksBackFromNow() {
+		List<MarketCatalogue.CatalogueQuery> queries = catalogue.started(Duration.ofHours(2));
+
+		assertThat(windows()).isNotEmpty().containsOnly(
+				Map.of("from", "2026-09-02T01:52:00Z", "to", "2026-09-02T03:52:00Z"));
+		assertThat(queries).extracting(MarketCatalogue.CatalogueQuery::requested)
+				.containsExactly(true, false);
+	}
+
+	/**
+	 * What health reports about the league names stays the forward poll's. The
+	 * fixture's "Italian Serie B" has no open markets, which a poll would log.
+	 */
+	@Test
+	void theStartedQueryLeavesTheLeagueReportToThePoll() {
+		catalogue.started(Duration.ofHours(2));
+
+		assertThat(catalogue.resolution()).isEqualTo(MarketCatalogue.LeagueResolution.NONE);
+		assertThat(logged(Level.INFO))
+				.noneSatisfy(message -> assertThat(message).contains("Italian Serie B"));
+	}
+
+	/**
+	 * A full page behind now is target fixtures that kicked off unseen and that
+	 * nothing else will ever look for: as loud as the forward query's.
+	 */
+	@Test
+	void namesTheStartedQueryLoudlyWhenItFillsThePage() {
+		doReturn(fullPage()).when(rest).post(eq("listMarketCatalogue/"),
+				argThat(BetfairCatalogueTest::byCompetition), any());
+
+		catalogue.started(Duration.ofHours(2));
+
+		assertThat(logged(Level.WARN)).anySatisfy(message ->
+				assertThat(message).contains("already kicked off").contains("200"));
+	}
+
+	/** Every {@code marketStartTime} window the catalogue was asked for. */
+	private List<Object> windows() {
+		ArgumentCaptor<Object> request = ArgumentCaptor.forClass(Object.class);
+		verify(rest, org.mockito.Mockito.atLeastOnce())
+				.post(eq("listMarketCatalogue/"), request.capture(), any());
+		return request.getAllValues().stream()
+				.map(body -> ((Map<?, ?>) ((Map<?, ?>) body).get("filter")).get("marketStartTime"))
+				.map(Object.class::cast)
+				.toList();
+	}
+
 	/** Which of the two queries a request body is, by the filter it carries. */
 	private static boolean byCompetition(@Nullable Object body) {
 		return body instanceof Map<?, ?> map
