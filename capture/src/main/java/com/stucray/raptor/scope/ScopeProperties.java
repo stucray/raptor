@@ -8,13 +8,14 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * The dials that replace the capture window.
  *
  * @param horizon how far ahead a kickoff must be to enter scope. Two hours
- *     since #52, measured over every scoped market from 2026-09-02 to 10-03:
- *     the last two hours before kickoff hold 64% of the money matched before
- *     kickoff and 81% of its stream messages, while 4h-to-2h held about 2% of
- *     all money matched on a market. In play is 76% of the money and 88% of the
- *     messages whatever this is. It is also how long before a card the host
- *     must be awake with its lid open, which is the cost being traded. Four
- *     hours, inherited from paddock #91, was never measured.
+ *     since #52. The capture cost it sets is how long before a card the host
+ *     must be awake with its lid open. #52 weighed that against where the
+ *     pre-kickoff activity sits, measured over every scoped market from
+ *     2026-09-02 to 10-03: the last two hours before kickoff hold 64% of the
+ *     money matched before kickoff and 81% of its stream messages. That half of
+ *     the argument is a judgement about which data is worth having, which
+ *     capture does not make (#61), so the value is a choice to be revisited
+ *     there. Four hours, inherited from paddock #91, was never measured.
  * @param lateLookback how far back a kickoff may be for a market discovery has
  *     never seen to enter scope anyway (#57). Without it a fixture is captured
  *     only if some poll succeeds between Betfair listing it and its kickoff, so

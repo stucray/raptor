@@ -12,8 +12,7 @@ import org.jspecify.annotations.Nullable;
  * tested without a Betfair session.
  *
  * @param eventId the fixture this market belongs to. The planner trims by whole
- *     events, so this is load-bearing rather than descriptive: half a fixture's
- *     MATCH_ODDS + O/U bundle is worth little to calibration.
+ *     events, so this is load-bearing rather than descriptive.
  * @param kickoff Betfair's {@code marketStartTime}. Nullable because the
  *     catalogue does not promise it, and a market with no start time must still
  *     be capturable — it sorts last rather than being dropped.

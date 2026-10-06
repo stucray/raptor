@@ -12,7 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * What the programme is asking to capture: leagues, market types, control set.
+ * What the configuration asks raptor to capture: leagues, market types, control
+ * set.
  *
  * <p>Read from the paddock-owned {@code capture.properties} — <b>the same file
  * the launcher reads</b>, not a copy. The league set has one definition on

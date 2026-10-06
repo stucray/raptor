@@ -13,12 +13,21 @@ raptor captures football data, and only captures it.
 
 - **Not an interpreter.** raptor stores each source **verbatim** and never parses the payload. Ingest does framing and addressing only: where one message ends and the next begins, and which market it belongs to. A parse bug must be structurally unable to reach the system of record; `WritePathIsolationTest` holds that, and there is no parser anywhere in this build.
 - **Not a mapper.** Native identifiers are kept **exactly as received**: Betfair market, event and selection ids, competition names, country codes, football-data division codes. Canonical countries, competitions and teams are a separate concern, deliberately deferred. Because nothing is overwritten with a mapping, one can be added later without re-capturing anything.
-- **Not analysis.** Parsing, projection, joins, features and results live downstream, in a separate private application that reads `raw`. A comparison population, a cohort or a control set is an analysis construct, not a capture concern.
+- **Not analysis.** Parsing, projection, joins, features and results live downstream, in whatever applications read `raw`. A comparison population, a cohort or a control set is an analysis construct, not a capture concern.
 - **Not a data publisher.** Betfair's data is licensed for personal use. This repository contains no Betfair data, nothing derived from it that identifies a real market, and no personal details. `scripts/scan-no-betfair-data.py` enforces that on every build. Tests run on synthetic samples, whose shape is pinned by manifests of key paths and types.
 
 ## What to capture
 
-**Capture the leagues being traded, from whatever sources cover them.** Scope follows the trading programme. A market is captured because it may be traded, not to fill capacity or to serve as a comparison. New sources (for example, a live match-events feed) arrive as new adapters under the same rules: verbatim, native ids, no interpretation.
+**As much as capture's own constraints allow, from every source raptor has an adapter for.** Capture scope and analysis scope are different questions. Capture scope is what raptor can record. Analysis scope is which part of it someone wants to study, and each consumer answers that for itself, downstream. So a market is never captured, or left out, because of what it will or will not be used for.
+
+What does bound capture:
+
+- **Betfair's stream limits.** 200 markets per connection, and a limited number of concurrent connections per app key (10 by default), shared with anything else that uses the key.
+- **The host.** It must stay awake for as long as anything is in scope.
+- **The catalogue.** Its poll rate and per-request weight limits.
+- **Storage and write throughput** of `raw`.
+
+A scope setting is justified by one of these, or it is marked as a choice still to be revisited. New sources (for example, a live match-events feed) arrive as new adapters under the same rules: verbatim, native ids, no interpretation.
 
 ## Rules that follow from this
 

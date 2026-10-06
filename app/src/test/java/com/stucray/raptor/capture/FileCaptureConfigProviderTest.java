@@ -34,7 +34,7 @@ class FileCaptureConfigProviderTest {
         assertThat(c.leagues())
             .hasSize(8)
             .contains("English Premier League", "Spanish Segunda Division");
-        // MATCH_ODDS plus the three O/U lines the historic corpus carries.
+        // MATCH_ODDS plus three O/U lines.
         assertThat(c.marketTypes()).hasSize(4).contains("MATCH_ODDS");
         assertThat(c.controlCountries())
             .as("the control set is retired (#11)")

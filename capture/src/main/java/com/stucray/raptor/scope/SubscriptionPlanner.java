@@ -21,10 +21,10 @@ import org.springframework.stereotype.Component;
  * arbitrary.
  *
  * <p><b>Whole events, never half of one.</b> A fixture's MATCH_ODDS and its
- * three over/under lines are captured together or not at all. Half a bundle is
- * worth very little to calibration: the O/U lines are only interesting
- * alongside the match odds they move with, and a market-by-market trim would
- * silently produce exactly that.
+ * three over/under lines are captured together or not at all. The reason given
+ * when this was written was analytical (an O/U line is read alongside the match
+ * odds it moves with), which is not a capture reason (#61). The policy stands
+ * until that review replaces it.
  *
  * <p><b>Four tiers, in order — requested before control, and only then
  * in-flight before pending.</b>
