@@ -156,10 +156,9 @@ class BetfairSessionTest {
 	/**
 	 * A failed keep-alive drops the token instead of hoping.
 	 *
-	 * <p>Betfair expires an idle session in about four hours and the stream does
-	 * not count as activity, so a resident recorder that ignores a failed
-	 * keep-alive discovers the lapse from the stream — which is the expensive
-	 * place to discover it.
+	 * <p>Betfair ends a session a fixed time after login, whatever traffic it
+	 * carries, so a resident recorder that ignores a failed keep-alive discovers
+	 * the lapse from the stream — which is the expensive place to discover it.
 	 */
 	@Test
 	void dropsTheTokenWhenKeepAliveFails() {

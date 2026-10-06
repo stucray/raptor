@@ -181,10 +181,12 @@ class BetfairSession {
 	/**
 	 * Keep the session alive.
 	 *
-	 * <p>Betfair expires an idle session in about four hours, and <b>the stream
-	 * does not count as activity</b> — only this endpoint does. A resident
-	 * recorder therefore has to say something every few hours or lose a session
-	 * it is actively using.
+	 * <p>Betfair ends a session a fixed time after login (12 hours on the
+	 * international exchange, 24 for UK and Ireland accounts), and <b>no API
+	 * activity extends it</b>: not the stream, not REST, only this endpoint. A
+	 * resident recorder therefore has to call it inside that window or lose a
+	 * session it is actively using. The 3h default sits well inside the shorter
+	 * of the two (#59).
 	 *
 	 * <p>Never throws. A failed keep-alive is not worth taking anything down
 	 * for: the next call re-authenticates on its own fault code.
