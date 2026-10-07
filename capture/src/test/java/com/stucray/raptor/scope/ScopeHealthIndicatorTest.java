@@ -193,7 +193,7 @@ class ScopeHealthIndicatorTest {
 				java.time.Duration.ofMinutes(15),
 				java.time.Duration.ofSeconds(10), java.time.Duration.ofMinutes(130),
 				java.time.Duration.ofHours(6), java.time.Duration.ofHours(48),
-				java.time.Duration.ofMinutes(30), true, 3);
+				java.time.Duration.ofMinutes(30), true, 3, 200, 1);
 	}
 
 	/** A catalogue that answers only the lookahead question. */

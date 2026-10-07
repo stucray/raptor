@@ -36,7 +36,8 @@ class MarketScopes {
 	 *
 	 * <p>The exception is a market that had left scope and has come back: a
 	 * rescheduled fixture reappearing in the catalogue is a market to capture,
-	 * not a closed row to preserve, so DONE is resurrected to PENDING.
+	 * not a closed row to preserve, so DONE is resurrected to PENDING — on no
+	 * connection, since PENDING holds no slot.
 	 */
 	void seen(CatalogueMarket market, boolean requested) {
 		jdbc.sql("""
@@ -56,6 +57,8 @@ class MarketScopes {
 										else raw.market_scope.state end,
 								exit_reason = case when raw.market_scope.state = 'DONE' then null
 										else raw.market_scope.exit_reason end,
+								connection_slot = case when raw.market_scope.state = 'DONE' then null
+										else raw.market_scope.connection_slot end,
 								state_changed_at = case when raw.market_scope.state = 'DONE'
 										then excluded.state_changed_at
 										else raw.market_scope.state_changed_at end""")
@@ -99,7 +102,8 @@ class MarketScopes {
 	/** Everything still in scope, for the planner and the guards. */
 	List<ScopedMarket> open() {
 		return jdbc.sql("""
-						select market_id, event_id, kickoff, state, in_play_since, requested
+						select market_id, event_id, kickoff, state, in_play_since, requested,
+								connection_slot
 						from raw.market_scope
 						where state <> 'DONE'
 						order by kickoff nulls last, market_id""")
@@ -109,49 +113,69 @@ class MarketScopes {
 						instant(rs.getObject("kickoff", OffsetDateTime.class)),
 						ScopeState.valueOf(rs.getString("state")),
 						instant(rs.getObject("in_play_since", OffsetDateTime.class)),
-						rs.getBoolean("requested")))
+						rs.getBoolean("requested"),
+						rs.getObject("connection_slot", Integer.class)))
 				.list();
 	}
 
 	/**
-	 * Set the wire membership to exactly these markets.
+	 * Set one connection's wire membership to exactly these markets.
 	 *
 	 * <p><b>Both directions, in one write, because the subscription is a
 	 * replacement and not an addition.</b> {@code marketSubscription} carries the
-	 * whole market list every time, so a market that was in the last plan and is
-	 * not in this one has left the wire — and recording only the entries is what
-	 * made the ledger overstate capture for a whole card (#219). On 2026-09-08
-	 * the planner trimmed to 200, said so, and the table held 205 rows in
-	 * {@code SUBSCRIBED} at the same instant; by kickoff the displaced rows had
-	 * gone on to {@code LIVE}, and 31 markets the ledger called live had received
-	 * no message in five minutes of in-play. An absence is invisible: a market
-	 * with no messages and a LIVE record looks exactly like one that was captured
-	 * and quiet, so the error ran in the direction that hides a gap.
+	 * whole market list every time, so a market that was in the connection's last
+	 * plan and is not in this one has left the wire — and recording only the
+	 * entries is what made the ledger overstate capture for a whole card (#219).
+	 * On 2026-09-08 the planner trimmed to 200, said so, and the table held 205
+	 * rows in {@code SUBSCRIBED} at the same instant; by kickoff the displaced rows
+	 * had gone on to {@code LIVE}, and 31 markets the ledger called live had
+	 * received no message in five minutes of in-play. An absence is invisible: a
+	 * market with no messages and a LIVE record looks exactly like one that was
+	 * captured and quiet, so the error ran in the direction that hides a gap.
+	 *
+	 * <p><b>The replacement is scoped to this connection slot (#64).</b> Each
+	 * connection's subscription replaces only its own, so only rows on this slot
+	 * are taken off the wire. A replacement across the whole table, which is what
+	 * this was while there was one connection, would have every connection's
+	 * resubscribe demote every other connection's markets. A row on the wire with
+	 * no recorded slot was subscribed before slots existed, when there was only
+	 * the one connection, so it is slot 0's.
+	 *
+	 * <p>A market listed here that is on another slot moves to this one, keeping
+	 * its state: it is on the wire either way.
 	 *
 	 * <p>A displaced market goes back to {@code PENDING} and not to {@code DONE}:
-	 * it has not left scope, it has lost a slot, and the next plan may well take
-	 * it back. That is also why nothing is written to {@code exit_reason}, which
-	 * answers "why did this leave scope" and is constrained to {@code DONE} rows;
-	 * {@code state_changed_at} is when it left the wire.
+	 * it has not left scope, it has lost its place, and the next plan may well
+	 * take it back. That is also why nothing is written to {@code exit_reason},
+	 * which answers "why did this leave scope" and is constrained to {@code DONE}
+	 * rows; {@code state_changed_at} is when it left the wire, and it moves only
+	 * when the state does.
 	 *
 	 * <p><b>An empty list is not a removal.</b> The recorder keeps its current
 	 * subscription when scope empties rather than sending an empty one, so the
 	 * markets really are still on the wire and the rows must say so.
 	 */
-	void subscribed(Collection<String> marketIds) {
+	void subscribed(int connectionSlot, Collection<String> marketIds) {
 		if (marketIds.isEmpty()) {
 			return;
 		}
 		String[] ids = marketIds.toArray(String[]::new);
+		OffsetDateTime now = now();
 		jdbc.sql("""
 						update raw.market_scope
-						set state = case when market_id = any (?) then 'SUBSCRIBED'
-								else 'PENDING' end,
-								state_changed_at = ?
+						set connection_slot = case when market_id = any (?) then ? end,
+								state = case when market_id <> all (?) then 'PENDING'
+										when state = 'PENDING' then 'SUBSCRIBED'
+										else state end,
+								state_changed_at = case when market_id <> all (?)
+										or state = 'PENDING' then ? else state_changed_at end
 						where state <> 'DONE'
-							and case when market_id = any (?) then state = 'PENDING'
-									else state in ('SUBSCRIBED', 'LIVE') end""")
-				.params(List.of(ids, now(), ids))
+							and case when market_id = any (?)
+									then state = 'PENDING' or connection_slot is distinct from ?
+									else state in ('SUBSCRIBED', 'LIVE')
+										and coalesce(connection_slot, 0) = ? end""")
+				.params(List.of(ids, connectionSlot, ids, ids, now, ids, connectionSlot,
+						connectionSlot))
 				.update();
 	}
 

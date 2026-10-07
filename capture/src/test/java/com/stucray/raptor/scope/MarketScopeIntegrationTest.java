@@ -233,7 +233,7 @@ class MarketScopeIntegrationTest {
 		catalogue.offer(market("1.2", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
 
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		assertThat(states()).containsEntry("1.1", "SUBSCRIBED").containsEntry("1.2", "PENDING");
 	}
@@ -250,7 +250,7 @@ class MarketScopeIntegrationTest {
 	void aRepeatedSightingDoesNotResetTheState() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		service.refresh();
 
@@ -261,7 +261,7 @@ class MarketScopeIntegrationTest {
 	void theCatalogueReportingInPlayMakesASubscribedMarketLiveAndDatesTheGuard() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		catalogue.markets.clear();
 		catalogue.offer(market("1.1", "e1", KICKOFF, true, "OPEN"));
@@ -311,9 +311,9 @@ class MarketScopeIntegrationTest {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		catalogue.offer(market("1.2", "e2", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1", "1.2"));
+		service.subscribed(0, List.of("1.1", "1.2"));
 
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		assertThat(states()).containsEntry("1.1", "SUBSCRIBED").containsEntry("1.2", "PENDING");
 		// PENDING and not DONE: it lost a slot, it did not leave scope, and the
@@ -330,7 +330,7 @@ class MarketScopeIntegrationTest {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		catalogue.offer(market("1.2", "e2", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1", "1.2"));
+		service.subscribed(0, List.of("1.1", "1.2"));
 
 		catalogue.markets.clear();
 		catalogue.books("1.2", true, "OPEN");
@@ -338,7 +338,7 @@ class MarketScopeIntegrationTest {
 		service.refresh();
 		assertThat(states()).containsEntry("1.2", "LIVE");
 
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		assertThat(states()).containsEntry("1.2", "PENDING");
 		// The match is still being played, and the guard still measures from when
@@ -360,13 +360,112 @@ class MarketScopeIntegrationTest {
 		catalogue.offer(market("1.2", "e2", KICKOFF, false, "OPEN"));
 		catalogue.offer(market("1.3", "e3", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1", "1.2"));
+		service.subscribed(0, List.of("1.1", "1.2"));
 
 		// A target fixture arrives and takes the slot, exactly as the tier policy
 		// says it may.
-		service.subscribed(List.of("1.1", "1.3"));
+		service.subscribed(0, List.of("1.1", "1.3"));
 
 		assertThat(onTheWire()).containsExactlyInAnyOrder("1.1", "1.3");
+	}
+
+	/**
+	 * One connection's resubscribe leaves every other connection's markets on the
+	 * wire (#64).
+	 *
+	 * <p>The subscription is a replacement per connection, not per table. Until
+	 * connection slots, recording it replaced the wire membership of the whole
+	 * table — right for one connection, and with two it would have each
+	 * connection's resubscribe demote everything the other one carries.
+	 */
+	@Test
+	void resubscribingOneConnectionLeavesTheOthersMarketsOnTheWire() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.offer(market("1.2", "e2", KICKOFF, false, "OPEN"));
+		catalogue.offer(market("1.3", "e3", KICKOFF, false, "OPEN"));
+		service.refresh();
+		service.subscribed(0, List.of("1.1"));
+
+		service.subscribed(1, List.of("1.2"));
+
+		assertThat(onTheWire()).containsExactlyInAnyOrder("1.1", "1.2");
+		assertThat(slots()).containsEntry("1.1", 0).containsEntry("1.2", 1);
+
+		// Slot 0 replaces its own subscription: its old market leaves the wire and
+		// slot 1's stays exactly where it was.
+		service.subscribed(0, List.of("1.3"));
+
+		assertThat(states()).containsEntry("1.1", "PENDING").containsEntry("1.2", "SUBSCRIBED")
+				.containsEntry("1.3", "SUBSCRIBED");
+		assertThat(slots()).containsEntry("1.1", null).containsEntry("1.2", 1)
+				.containsEntry("1.3", 0);
+	}
+
+	/**
+	 * A market on the wire from before connection slots belongs to slot 0.
+	 *
+	 * <p>There was one connection then, so that is where it is. The row has no
+	 * recorded slot, and slot 0's replacement must still take it off the wire —
+	 * on the first resubscribe after deploying, or it would stay SUBSCRIBED with
+	 * nothing listening, which is #219 again.
+	 */
+	@Test
+	void aMarketOnTheWireBeforeSlotsIsSlotZeros() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		catalogue.offer(market("1.2", "e2", KICKOFF, false, "OPEN"));
+		service.refresh();
+		// As the table held it before V42: on the wire, no slot recorded.
+		jdbc.sql("update raw.market_scope set state = 'SUBSCRIBED' where market_id = '1.1'")
+				.update();
+
+		service.subscribed(1, List.of("1.2"));
+		assertThat(states()).as("another slot's resubscribe leaves it alone")
+				.containsEntry("1.1", "SUBSCRIBED");
+
+		service.subscribed(0, List.of("1.2"));
+		assertThat(states()).containsEntry("1.1", "PENDING");
+	}
+
+	/**
+	 * A market that moves between connections stays on the wire: its state and
+	 * the moment it reached it are left as they were.
+	 */
+	@Test
+	void aMarketMovingConnectionKeepsItsStateAndItsClock() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		service.refresh();
+		service.subscribed(1, List.of("1.1"));
+		catalogue.markets.clear();
+		catalogue.books("1.1", true, "OPEN");
+		clock.now = KICKOFF.plusSeconds(60);
+		service.refresh();
+		assertThat(states()).containsEntry("1.1", "LIVE");
+		Instant reachedLive = stateChangedAt("1.1");
+
+		clock.now = KICKOFF.plusSeconds(120);
+		service.subscribed(0, List.of("1.1"));
+
+		assertThat(states()).containsEntry("1.1", "LIVE");
+		assertThat(slots()).containsEntry("1.1", 0);
+		assertThat(stateChangedAt("1.1")).isEqualTo(reachedLive);
+	}
+
+	/**
+	 * A market brought back into scope holds no slot: PENDING is on no
+	 * connection, and the table refuses anything else.
+	 */
+	@Test
+	void aMarketBackInScopeIsOnNoConnection() {
+		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
+		service.refresh();
+		service.subscribed(2, List.of("1.1"));
+		jdbc.sql("update raw.market_scope set state = 'DONE', exit_reason = 'KICKOFF_ELAPSED' "
+				+ "where market_id = '1.1'").update();
+
+		service.refresh();
+
+		assertThat(states()).containsEntry("1.1", "PENDING");
+		assertThat(slots()).containsEntry("1.1", null);
 	}
 
 	/** The in-play clock is set once: it is what the guard measures from. */
@@ -430,7 +529,7 @@ class MarketScopeIntegrationTest {
 	void theAbandonmentGuardRetiresAFixtureThatNeverKickedOff() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		clock.now = KICKOFF.plus(Duration.ofHours(6)).plusSeconds(1);
 		service.refresh();
@@ -451,7 +550,7 @@ class MarketScopeIntegrationTest {
 	void aMarketThatHasKickedOffIsFollowedByIdAndReachesLive() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		catalogue.markets.clear();
 		catalogue.books("1.1", true, "OPEN");
@@ -473,7 +572,7 @@ class MarketScopeIntegrationTest {
 	void theInPlayGuardRetiresAFollowedMatchTwoHoursAfterKickoff() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		catalogue.markets.clear();
 		catalogue.books("1.1", true, "OPEN");
@@ -500,7 +599,7 @@ class MarketScopeIntegrationTest {
 	void aMarketThatClosesAfterKickoffIsSeenToClose() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		catalogue.markets.clear();
 		catalogue.books("1.1", true, "CLOSED");
@@ -594,7 +693,7 @@ class MarketScopeIntegrationTest {
 	void aSubscribedMarketIsNotRetiredMerelyForVanishing() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		catalogue.markets.clear();
 		service.refresh();
@@ -681,7 +780,7 @@ class MarketScopeIntegrationTest {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		catalogue.offer(market("1.2", "e2", KICKOFF, true, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1", "1.2"));
+		service.subscribed(0, List.of("1.1", "1.2"));
 
 		// Both kick off and leave the forward window; 1.2's guard runs out.
 		catalogue.markets.clear();
@@ -739,7 +838,7 @@ class MarketScopeIntegrationTest {
 	void aFailedPollChangesNothing() {
 		catalogue.offer(market("1.1", "e1", KICKOFF, false, "OPEN"));
 		service.refresh();
-		service.subscribed(List.of("1.1"));
+		service.subscribed(0, List.of("1.1"));
 
 		catalogue.fail = true;
 		service.poll();
@@ -882,6 +981,15 @@ class MarketScopeIntegrationTest {
 	private Instant stateChangedAt(String marketId) {
 		return jdbc.sql("select state_changed_at from raw.market_scope where market_id = ?")
 				.param(marketId).query(java.time.OffsetDateTime.class).single().toInstant();
+	}
+
+	/** Each market's connection slot, null when it has none. */
+	private Map<String, @Nullable Integer> slots() {
+		Map<String, @Nullable Integer> slots = new LinkedHashMap<>();
+		jdbc.sql("select market_id, connection_slot from raw.market_scope")
+				.query((rs, n) -> slots.put(rs.getString(1), rs.getObject(2, Integer.class)))
+				.list();
+		return slots;
 	}
 
 	private @org.jspecify.annotations.Nullable String exitReason(String marketId) {

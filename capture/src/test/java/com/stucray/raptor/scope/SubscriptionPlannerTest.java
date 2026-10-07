@@ -251,6 +251,148 @@ class SubscriptionPlannerTest {
 		assertThat(plan.droppedControlEvents()).isEqualTo(1);
 	}
 
+	/**
+	 * Partitioned across connections, no connection carries more than it may.
+	 *
+	 * <p>The cap is per connection (#56), so the same trim has to bind on each
+	 * slot separately: a plan that is fine in total and over on one slot is
+	 * refused by Betfair for that connection, whole.
+	 */
+	@Test
+	void noConnectionCarriesMoreThanItsCapacity() {
+		List<ScopedMarket> open = new ArrayList<>();
+		for (int i = 0; i < 5; i++) {
+			open.addAll(event("e" + i, KICKOFF.plusSeconds(i), 4, ScopeState.PENDING, true));
+		}
+
+		SubscriptionPlan plan = new SubscriptionPlanner(8, 3).plan(open);
+
+		assertThat(plan.connections()).extracting(c -> c.marketIds().size())
+				.containsExactly(8, 8, 4);
+		assertThat(plan.marketIds()).doesNotHaveDuplicates().hasSize(20);
+		assertThat(plan.droppedRequestedEvents()).isZero();
+	}
+
+	/**
+	 * A fixture is never split across connections.
+	 *
+	 * <p>With six markets of room per connection and four markets per fixture,
+	 * filling each connection to the brim would put half a fixture on each.
+	 */
+	@Test
+	void aFixtureIsNeverSplitAcrossConnections() {
+		List<ScopedMarket> open = new ArrayList<>();
+		open.addAll(event("e1", KICKOFF, 4, ScopeState.PENDING, true));
+		open.addAll(event("e2", KICKOFF.plusSeconds(60), 4, ScopeState.PENDING, true));
+
+		SubscriptionPlan plan = new SubscriptionPlanner(6, 2).plan(open);
+
+		assertThat(plan.marketIds(0)).allMatch(id -> id.startsWith("e1"));
+		assertThat(plan.marketIds(1)).allMatch(id -> id.startsWith("e2"));
+	}
+
+	/**
+	 * A fixture keeps its connection while others arrive and leave.
+	 *
+	 * <p>Moving a fixture means resubscribing both connections it touches, and a
+	 * resubscribe asks Betfair for a full image of every market on the
+	 * connection, so the plan never rebalances. Here slot 0 has emptied because
+	 * its fixture finished; the fixture on slot 1 stays where it is, and the new
+	 * one takes the room on slot 0.
+	 */
+	@Test
+	void aFixtureKeepsItsConnectionWhileOthersArriveAndLeave() {
+		List<ScopedMarket> open = new ArrayList<>();
+		open.addAll(eventOn("running", KICKOFF, 4, ScopeState.LIVE, 1));
+		open.addAll(event("arriving", KICKOFF.plusSeconds(3600), 4, ScopeState.PENDING, true));
+
+		SubscriptionPlan plan = new SubscriptionPlanner(4, 2).plan(open);
+
+		assertThat(plan.marketIds(1)).allMatch(id -> id.startsWith("running")).hasSize(4);
+		assertThat(plan.marketIds(0)).allMatch(id -> id.startsWith("arriving")).hasSize(4);
+	}
+
+	/** A new fixture goes to the lowest-numbered connection with room. */
+	@Test
+	void aNewFixtureGoesToTheLowestConnectionWithRoom() {
+		List<ScopedMarket> open = new ArrayList<>();
+		open.addAll(eventOn("full", KICKOFF, 4, ScopeState.SUBSCRIBED, 0));
+		open.addAll(event("new", KICKOFF.plusSeconds(60), 4, ScopeState.PENDING, true));
+
+		SubscriptionPlan plan = new SubscriptionPlanner(4, 3).plan(open);
+
+		assertThat(plan.marketIds(0)).allMatch(id -> id.startsWith("full"));
+		assertThat(plan.marketIds(1)).allMatch(id -> id.startsWith("new")).hasSize(4);
+		assertThat(plan.marketIds(2)).isEmpty();
+	}
+
+	/**
+	 * A market discovered later joins its fixture's connection.
+	 *
+	 * <p>Three of the fixture's markets are on slot 1 and the fourth has only just
+	 * entered scope, so it sits in a different tier. Grouping by tier alone would
+	 * put it on slot 0 — the lowest with room — and split the fixture.
+	 */
+	@Test
+	void aLateMarketJoinsItsFixturesConnection() {
+		List<ScopedMarket> open = new ArrayList<>();
+		open.addAll(eventOn("e1", KICKOFF, 3, ScopeState.SUBSCRIBED, 1));
+		open.add(new ScopedMarket("e1-late", "e1", KICKOFF, ScopeState.PENDING, null, true));
+
+		SubscriptionPlan plan = new SubscriptionPlanner(4, 2).plan(open);
+
+		assertThat(plan.marketIds(1)).hasSize(4).contains("e1-late");
+		assertThat(plan.marketIds(0)).isEmpty();
+	}
+
+	/** Never more connections than allowed: what fits on none is dropped. */
+	@Test
+	void neverPlansMoreConnectionsThanAllowed() {
+		List<ScopedMarket> open = new ArrayList<>();
+		for (int i = 0; i < 3; i++) {
+			open.addAll(event("e" + i, KICKOFF.plusSeconds(i), 4, ScopeState.PENDING, true));
+		}
+
+		SubscriptionPlan plan = new SubscriptionPlanner(4, 2).plan(open);
+
+		assertThat(plan.connections()).extracting(ConnectionSubscription::connectionSlot)
+				.containsExactly(0, 1);
+		assertThat(plan.droppedRequestedEvents()).isEqualTo(1);
+	}
+
+	/**
+	 * A fixture on a slot that is no longer allowed is placed again.
+	 *
+	 * <p>Lowering the number of connections leaves fixtures on slots that will
+	 * not be opened; holding them there would drop them without saying so.
+	 */
+	@Test
+	void aFixtureOnASlotNoLongerAllowedIsPlacedAgain() {
+		List<ScopedMarket> open = eventOn("stranded", KICKOFF, 4, ScopeState.LIVE, 3);
+
+		SubscriptionPlan plan = new SubscriptionPlanner(4, 2).plan(open);
+
+		assertThat(plan.marketIds(0)).hasSize(4).allMatch(id -> id.startsWith("stranded"));
+	}
+
+	/** Slot 0 always has a plan, if only an empty one. */
+	@Test
+	void slotZeroIsAlwaysInThePlan() {
+		assertThat(new SubscriptionPlanner(200, 4).plan(List.of()).connections())
+				.containsExactly(new ConnectionSubscription(0, List.of()));
+	}
+
+	/** A fixture already on a connection, as the ledger records it. */
+	private static List<ScopedMarket> eventOn(String eventId, Instant kickoff, int markets,
+			ScopeState state, int connectionSlot) {
+		List<ScopedMarket> group = new ArrayList<>();
+		for (int i = 0; i < markets; i++) {
+			group.add(new ScopedMarket(eventId + "-" + i, eventId, kickoff, state, null, true,
+					connectionSlot));
+		}
+		return group;
+	}
+
 	private static List<ScopedMarket> event(String eventId, Instant kickoff, int markets,
 			ScopeState state, boolean requested) {
 		List<ScopedMarket> group = new ArrayList<>();

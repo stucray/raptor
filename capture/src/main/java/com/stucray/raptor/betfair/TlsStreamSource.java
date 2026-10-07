@@ -56,6 +56,12 @@ final class TlsStreamSource implements StreamSource {
 	/** How long the maintainer sleeps in one go, so close() is not waited on. */
 	private static final Duration SLICE = Duration.ofSeconds(1);
 
+	/**
+	 * The connection slot this connection subscribes for. Always 0 for now: the
+	 * recorder holds one connection until #65 gives each slot its own.
+	 */
+	private static final int CONNECTION_SLOT = 0;
+
 	private final StreamConnection connection;
 	private final BetfairSession session;
 	private final BetfairProperties betfair;
@@ -289,10 +295,11 @@ final class TlsStreamSource implements StreamSource {
 	 */
 	void follow() throws IOException {
 		SubscriptionPlan plan = scope.plan();
-		if (plan.marketIds().equals(subscribed)) {
+		List<String> wanted = plan.marketIds(CONNECTION_SLOT);
+		if (wanted.equals(subscribed)) {
 			return;
 		}
-		if (plan.marketIds().isEmpty()) {
+		if (wanted.isEmpty()) {
 			// Everything in the last subscription has finished. Sending an empty
 			// marketSubscription would replace a harmless subscription to closed
 			// markets with a request Betfair has no good answer to; the markets
@@ -301,7 +308,7 @@ final class TlsStreamSource implements StreamSource {
 					subscribed.size());
 			return;
 		}
-		log.info("scope moved: re-subscribing to {} market(s)", plan.marketIds().size());
+		log.info("scope moved: re-subscribing to {} market(s)", wanted.size());
 		// Without a clk, deliberately. The subscription is a different one, so the
 		// server owes a full image of it; asking to resume a delta against the
 		// previous market set is how a market ends up subscribed with no book
@@ -310,9 +317,10 @@ final class TlsStreamSource implements StreamSource {
 	}
 
 	private void subscribe(SubscriptionPlan plan, Resume from) throws IOException {
+		List<String> marketIds = plan.marketIds(CONNECTION_SLOT);
 		Map<String, Object> subscription = new LinkedHashMap<>();
 		subscription.put("op", "marketSubscription");
-		subscription.put("marketFilter", Map.of("marketIds", plan.marketIds()));
+		subscription.put("marketFilter", Map.of("marketIds", marketIds));
 		subscription.put("marketDataFilter", Map.of(
 				"fields", properties.fields(),
 				"conflateMs", properties.conflate().toMillis()));
@@ -328,11 +336,11 @@ final class TlsStreamSource implements StreamSource {
 			subscription.put("clk", from.clk());
 		}
 		send(subscription);
-		subscribed = plan.marketIds();
+		subscribed = marketIds;
 		// After the send, never before: a market recorded as subscribed that the
 		// server refused would be protected from the next trim by the very tier
 		// that exists to protect markets actually being recorded.
-		scope.subscribed(plan.marketIds());
+		scope.subscribed(CONNECTION_SLOT, marketIds);
 		if (plan.droppedRequestedEvents() > 0) {
 			log.warn("{} requested event(s) did not fit in the subscription",
 					plan.droppedRequestedEvents());

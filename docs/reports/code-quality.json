@@ -3,10 +3,10 @@
     "tool": "pmd",
     "tool_version": "7.24.0",
     "ruleset": "pmd-ruleset.xml",
-    "total_findings": 77,
+    "total_findings": 80,
     "by_priority": {
       "2": 5,
-      "3": 72
+      "3": 75
     }
   },
   "findings": [
@@ -138,8 +138,8 @@
       "class": "TlsStreamSource",
       "method": "awaitAuthentication",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 144,
-      "end_line": 144,
+      "begin_line": 150,
+      "end_line": 150,
       "message": "Avoid using literals such as \"status\" in if statements"
     },
     {
@@ -150,8 +150,8 @@
       "class": "TlsStreamSource",
       "method": "awaitAuthentication",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 153,
-      "end_line": 153,
+      "begin_line": 159,
+      "end_line": 159,
       "message": "Avoid using literals such as \"connection\" in if statements"
     },
     {
@@ -162,8 +162,8 @@
       "class": "TlsStreamSource",
       "method": "checkStatus",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 223,
-      "end_line": 223,
+      "begin_line": 229,
+      "end_line": 229,
       "message": "Avoid using literals such as \"SUBSCRIPTION_LIMIT_EXCEEDED\" in if statements"
     },
     {
@@ -174,8 +174,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 185,
-      "end_line": 185,
+      "begin_line": 191,
+      "end_line": 191,
       "message": "Avoid using literals such as \"mcm\" in if statements"
     },
     {
@@ -186,8 +186,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 189,
-      "end_line": 189,
+      "begin_line": 195,
+      "end_line": 195,
       "message": "Avoid using literals such as \"status\" in if statements"
     },
     {
@@ -198,8 +198,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 193,
-      "end_line": 193,
+      "begin_line": 199,
+      "end_line": 199,
       "message": "Avoid using literals such as \"connection\" in if statements"
     },
     {
@@ -270,8 +270,32 @@
       "class": "ScopeProperties",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
-      "begin_line": 93,
-      "end_line": 93,
+      "begin_line": 105,
+      "end_line": 105,
+      "message": "Avoid using literals such as 1 in if statements"
+    },
+    {
+      "rule": "AvoidLiteralsInIfCondition",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.scope",
+      "class": "ScopeProperties",
+      "method": "",
+      "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
+      "begin_line": 109,
+      "end_line": 109,
+      "message": "Avoid using literals such as 1 in if statements"
+    },
+    {
+      "rule": "AvoidLiteralsInIfCondition",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.scope",
+      "class": "ScopeProperties",
+      "method": "",
+      "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
+      "begin_line": 112,
+      "end_line": 112,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
@@ -546,8 +570,8 @@
       "class": "TlsStreamSource",
       "method": "checkStatus",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 206,
-      "end_line": 206,
+      "begin_line": 212,
+      "end_line": 212,
       "message": "The method 'checkStatus(JsonNode)' has a cyclomatic complexity of 10."
     },
     {
@@ -690,8 +714,8 @@
       "class": "TlsStreamSource",
       "method": "close",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 388,
-      "end_line": 388,
+      "begin_line": 396,
+      "end_line": 396,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -859,7 +883,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
       "begin_line": 50,
-      "end_line": 392,
+      "end_line": 400,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
@@ -908,6 +932,18 @@
       "file": "src/main/java/com/stucray/raptor/scope/MarketScopeService.java",
       "begin_line": 62,
       "end_line": 461,
+      "message": "This class has too many methods, consider refactoring it."
+    },
+    {
+      "rule": "TooManyMethods",
+      "ruleset": "Design",
+      "priority": 3,
+      "package": "com.stucray.raptor.scope",
+      "class": "SubscriptionPlanner",
+      "method": "",
+      "file": "src/main/java/com/stucray/raptor/scope/SubscriptionPlanner.java",
+      "begin_line": 77,
+      "end_line": 292,
       "message": "This class has too many methods, consider refactoring it."
     },
     {

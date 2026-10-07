@@ -118,11 +118,11 @@ class BetfairStreamLiveSmokeTest {
 
 		@Override
 		public SubscriptionPlan plan() {
-			return new SubscriptionPlan(marketIds, 0, 0);
+			return SubscriptionPlan.onSlotZero(marketIds);
 		}
 
 		@Override
-		public void subscribed(List<String> ids) {
+		public void subscribed(int connectionSlot, List<String> ids) {
 			subscribed.add(List.copyOf(ids));
 		}
 	}

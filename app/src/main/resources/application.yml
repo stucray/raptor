@@ -232,10 +232,10 @@ raptor:
     # tie and a 12:30Z Saturday kickoff are both covered without subscribing to
     # the hours between them — and a short-notice reschedule is picked up on the
     # next poll instead of missed.
-    # Two hours since #52: the last two hours hold most of the pre-kickoff
-    # book (64% of the money matched before kickoff, 81% of the messages), and
-    # this is also how long before a card the host must be awake. Measured, not
-    # inherited; see ScopeProperties.
+    # Two hours since #52. Its capture cost is how long before a card the host
+    # must be awake. #52 also weighed where the pre-kickoff activity sits, which
+    # is a judgement about the data's value that capture does not make (#61), so
+    # the value is a choice to revisit; see ScopeProperties.
     horizon: ${RAPTOR_SCOPE_HORIZON:2h}
     # Deliberately the 900s of record_suspensions.py's ID_REFRESH_S: a cadence
     # already exercised against Betfair's rate limits over a season.
@@ -277,6 +277,15 @@ raptor:
     # which is exactly why a discovery failure and an international break used
     # to be the same observation.
     poll-failures-before-red: ${RAPTOR_SCOPE_POLL_FAILURES_BEFORE_RED:3}
+    # How scope is partitioned across stream connections (#63, #64). Betfair
+    # refuses a subscription above its per-connection limit whole, so the
+    # planner trims to markets-per-connection on each connection. Each
+    # connection has a numbered connection slot, 0 up to max-connections - 1.
+    # The key's 10 connections are shared by every session on it, whichever
+    # application opened it, so max-connections is raptor's share of that
+    # budget. One until the recorder can run several (#65); #67 raises it to 4.
+    markets-per-connection: ${RAPTOR_SCOPE_MARKETS_PER_CONNECTION:200}
+    max-connections: ${RAPTOR_SCOPE_MAX_CONNECTIONS:1}
   close-out:
     # The nightly close-out (#199). Since #316 it only fetches the current
     # football-data season into raw: overround-analysis projects query now, as

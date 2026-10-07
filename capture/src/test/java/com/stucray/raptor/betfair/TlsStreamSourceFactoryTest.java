@@ -82,11 +82,11 @@ class TlsStreamSourceFactoryTest {
 		return new CaptureScope() {
 			@Override
 			public SubscriptionPlan plan() {
-				return new SubscriptionPlan(List.of("1.900000001"), 0, 0);
+				return SubscriptionPlan.onSlotZero(List.of("1.900000001"));
 			}
 
 			@Override
-			public void subscribed(List<String> marketIds) {
+			public void subscribed(int connectionSlot, List<String> marketIds) {
 			}
 		};
 	}

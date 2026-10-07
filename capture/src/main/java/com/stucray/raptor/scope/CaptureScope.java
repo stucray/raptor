@@ -14,15 +14,22 @@ import java.util.List;
  */
 public interface CaptureScope {
 
-	/** The markets to subscribe to now, trimmed to Betfair's cap. */
+	/**
+	 * What each connection should subscribe to now, trimmed to Betfair's cap on
+	 * each.
+	 */
 	SubscriptionPlan plan();
 
 	/**
-	 * Record that these markets are in the subscription the server accepted.
+	 * Record that these markets are the subscription the server accepted on one
+	 * connection.
 	 *
 	 * <p>Called after the subscribe, never before: a market marked subscribed
 	 * that the server refused would be protected from the next trim by the very
 	 * tier that exists to protect markets actually being recorded.
+	 *
+	 * @param connectionSlot the connection slot that subscribed
+	 * @param marketIds that connection's whole subscription
 	 */
-	void subscribed(List<String> marketIds);
+	void subscribed(int connectionSlot, List<String> marketIds);
 }

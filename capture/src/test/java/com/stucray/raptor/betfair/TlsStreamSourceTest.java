@@ -73,6 +73,8 @@ class TlsStreamSourceTest {
 		// recorded as subscribed that the server never saw would be protected from
 		// the next trim by the tier that exists to protect live ones.
 		assertThat(scope.subscribed).containsExactly(List.of("1.240", "1.241"));
+		// One connection, so it reports its subscription as slot 0's (#64).
+		assertThat(scope.slots).containsExactly(0);
 	}
 
 	@Test
@@ -224,7 +226,7 @@ class TlsStreamSourceTest {
 	}
 
 	private static SubscriptionPlan plan(String... marketIds) {
-		return new SubscriptionPlan(List.of(marketIds), 0, 0);
+		return SubscriptionPlan.onSlotZero(List.of(marketIds));
 	}
 
 	private static BetfairProperties properties() {
@@ -265,8 +267,9 @@ class TlsStreamSourceTest {
 	/** Scope, scripted: whatever the test says is in it. */
 	private static final class FakeScope implements CaptureScope {
 
-		private SubscriptionPlan plan = new SubscriptionPlan(List.of(), 0, 0);
+		private SubscriptionPlan plan = SubscriptionPlan.onSlotZero(List.of());
 		private final List<List<String>> subscribed = new ArrayList<>();
+		private final List<Integer> slots = new ArrayList<>();
 
 		@Override
 		public SubscriptionPlan plan() {
@@ -274,7 +277,8 @@ class TlsStreamSourceTest {
 		}
 
 		@Override
-		public void subscribed(List<String> marketIds) {
+		public void subscribed(int connectionSlot, List<String> marketIds) {
+			slots.add(connectionSlot);
 			subscribed.add(List.copyOf(marketIds));
 		}
 	}
