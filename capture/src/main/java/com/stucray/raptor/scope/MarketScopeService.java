@@ -442,7 +442,7 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 
 	/**
 	 * Record that these markets, and no others, are in the subscription the
-	 * server accepted.
+	 * server accepted on one connection.
 	 *
 	 * <p>Called after the subscribe, not before: a market marked SUBSCRIBED that
 	 * the server refused would be protected from the trim by the very tier that
@@ -452,10 +452,10 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 	 * because that is what {@code marketSubscription} does — a market trimmed out
 	 * of this plan has left the wire, and recording only the entries is what let
 	 * the ledger claim in-play capture of markets nothing was listening to
-	 * (#219).
+	 * (#219). It replaces only that connection's markets (#64).
 	 */
 	@Override
-	public void subscribed(List<String> marketIds) {
-		scopes.subscribed(marketIds);
+	public void subscribed(int connectionSlot, List<String> marketIds) {
+		scopes.subscribed(connectionSlot, marketIds);
 	}
 }

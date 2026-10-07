@@ -2,13 +2,16 @@ package com.stucray.raptor.scope;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,6 +22,13 @@ import org.springframework.stereotype.Component;
  * discovered it by reconnecting into {@code SUBSCRIPTION_LIMIT_EXCEEDED} every
  * five seconds, forever. So something has to choose, and the choice is not
  * arbitrary.
+ *
+ * <p><b>Partitioned across connections (#64).</b> The cap is per connection,
+ * and an app key allows several (#56, #63), so the plan is one subscription per
+ * <em>connection slot</em>: raptor's own number for a connection, from 0 up to
+ * {@code maxConnections - 1}, stable across reconnects. The trim binds on each
+ * connection separately, and a fixture stays on one connection until it leaves
+ * scope.
  *
  * <p><b>Whole events, never half of one.</b> A fixture's MATCH_ODDS and its
  * three over/under lines are captured together or not at all. The reason given
@@ -68,34 +78,37 @@ class SubscriptionPlanner {
 
 	private static final Logger log = LoggerFactory.getLogger(SubscriptionPlanner.class);
 
-	/**
-	 * Betfair's per-connection market cap.
-	 *
-	 * <p>Not a documented number: it is what a subscription is observed to
-	 * tolerate, and exceeding it fails the whole subscription rather than
-	 * truncating it — which is why the trim happens here rather than being left
-	 * to the server.
-	 */
-	static final int SUBSCRIPTION_CAP = 200;
-
 	private final int cap;
+	private final int maxConnections;
 
-	SubscriptionPlanner() {
-		this(SUBSCRIPTION_CAP);
+	@Autowired
+	SubscriptionPlanner(ScopeProperties properties) {
+		this(properties.marketsPerConnection(), properties.maxConnections());
 	}
 
+	/** One connection carrying at most {@code cap} markets. */
 	SubscriptionPlanner(int cap) {
+		this(cap, 1);
+	}
+
+	SubscriptionPlanner(int cap, int maxConnections) {
 		this.cap = cap;
+		this.maxConnections = maxConnections;
 	}
 
 	/**
-	 * The market ids to subscribe to.
+	 * What each connection slot should subscribe to.
 	 *
 	 * @param open every market still in scope
-	 * @return ids in a stable order, capped, whole events only
+	 * @return one subscription per slot that carries anything, slot 0 always;
+	 *     ids in a stable order, capped per connection, whole events only
 	 */
 	SubscriptionPlan plan(List<ScopedMarket> open) {
-		Set<String> chosen = new LinkedHashSet<>();
+		List<Set<String>> slots = new ArrayList<>();
+		for (int slot = 0; slot < maxConnections; slot++) {
+			slots.add(new LinkedHashSet<>());
+		}
+		Map<String, Integer> home = homes(open);
 		int droppedRequested = 0;
 		int droppedControl = 0;
 
@@ -112,45 +125,109 @@ class SubscriptionPlanner {
 		// which let the control set hold slots against a target fixture merely
 		// because it got there first — the exact crowding-out the tiers exist to
 		// prevent.
-		droppedRequested += take(byEvent(inFlight(open, true)), chosen);
-		droppedRequested += take(byEvent(pending(open, true)), chosen);
-		droppedControl += take(byEvent(inFlight(open, false)), chosen);
-		droppedControl += take(byEvent(pending(open, false)), chosen);
+		droppedRequested += take(byEvent(inFlight(open, true)), slots, home);
+		droppedRequested += take(byEvent(pending(open, true)), slots, home);
+		droppedControl += take(byEvent(inFlight(open, false)), slots, home);
+		droppedControl += take(byEvent(pending(open, false)), slots, home);
 
 		if (droppedRequested > 0) {
-			// Loud: this is the case where the programme's own leagues did not fit,
-			// which is a configuration problem (too many market types, too long a
-			// horizon) rather than a busy evening.
-			log.warn("{} requested event(s) did not fit under the {}-market cap; "
-					+ "narrow the horizon or the market types", droppedRequested, cap);
+			// Loud: this is the case where the configured leagues did not fit, which
+			// is a configuration problem (too many market types, too long a horizon,
+			// too few connections) rather than a busy evening.
+			log.warn("{} requested event(s) did not fit on {} connection(s) of {} markets; "
+					+ "narrow the horizon or the market types, or allow more connections",
+					droppedRequested, maxConnections, cap);
 		}
 		if (droppedControl > 0) {
-			log.info("{} control event(s) not subscribed; no capacity left under the "
-					+ "{}-market cap", droppedControl, cap);
+			log.info("{} control event(s) not subscribed; no capacity left on {} connection(s) "
+					+ "of {} markets", droppedControl, maxConnections, cap);
 		}
-		return new SubscriptionPlan(List.copyOf(chosen), droppedRequested, droppedControl);
+		List<ConnectionSubscription> connections = new ArrayList<>();
+		for (int slot = 0; slot < slots.size(); slot++) {
+			if (slot == 0 || !slots.get(slot).isEmpty()) {
+				connections.add(new ConnectionSubscription(slot, List.copyOf(slots.get(slot))));
+			}
+		}
+		return new SubscriptionPlan(connections, droppedRequested, droppedControl);
 	}
 
 	/**
-	 * Fit whole events into what is left of the cap.
+	 * Fit whole events into the connections.
 	 *
 	 * <p>An event that does not fit is skipped, not partially taken — and the
 	 * loop continues rather than stopping, because a later event may be smaller.
 	 * Skipping to the end would drop fixtures that would have fitted, which is
 	 * the same capacity loss the cap exists to manage.
+	 *
+	 * <p><b>An event with a home stays there.</b> Moving it would resubscribe two
+	 * connections, and a resubscribe asks Betfair for a full image of every
+	 * market on the connection, so an event already on a connection either fits
+	 * on that one or is dropped, exactly as it was when there was only one
+	 * connection. An event without a home goes to the lowest-numbered connection
+	 * with room, and that becomes its home for the rest of the plan, so a market
+	 * of the same fixture in a later tier joins it rather than splitting it.
 	 */
-	private int take(List<List<ScopedMarket>> events, Set<String> chosen) {
+	private int take(List<List<ScopedMarket>> events, List<Set<String>> slots,
+			Map<String, Integer> home) {
 		int dropped = 0;
 		for (List<ScopedMarket> event : events) {
 			List<String> ids = ids(event);
-			long adding = ids.stream().filter(id -> !chosen.contains(id)).count();
-			if (chosen.size() + adding > cap) {
+			String key = eventKey(event.getFirst());
+			Integer slot = placement(home.get(key), slots, ids);
+			if (slot == null) {
 				dropped++;
 				continue;
 			}
-			chosen.addAll(ids);
+			slots.get(slot).addAll(ids);
+			home.put(key, slot);
 		}
 		return dropped;
+	}
+
+	/** Its home if it fits there, the lowest slot with room if it has none. */
+	private @Nullable Integer placement(@Nullable Integer home, List<Set<String>> slots,
+			List<String> ids) {
+		if (home != null) {
+			return fits(slots.get(home), ids) ? home : null;
+		}
+		return lowestWithRoom(slots, ids);
+	}
+
+	private @Nullable Integer lowestWithRoom(List<Set<String>> slots, List<String> ids) {
+		for (int slot = 0; slot < slots.size(); slot++) {
+			if (fits(slots.get(slot), ids)) {
+				return slot;
+			}
+		}
+		return null;
+	}
+
+	private boolean fits(Set<String> slot, List<String> ids) {
+		long adding = ids.stream().filter(id -> !slot.contains(id)).count();
+		return slot.size() + adding <= cap;
+	}
+
+	/**
+	 * The connection each event is already on.
+	 *
+	 * <p>Read from the markets on the wire, whatever their tier, so the answer is
+	 * the same for a fixture's in-flight markets and for one discovered later. A
+	 * slot that is no longer allowed is no home: lowering the number of
+	 * connections must re-place what was on the closed ones, not drop it. A
+	 * market subscribed before connection slots existed has no recorded slot and
+	 * is placed like a new one.
+	 */
+	private Map<String, Integer> homes(List<ScopedMarket> open) {
+		Map<String, Integer> home = new HashMap<>();
+		for (ScopedMarket market : open) {
+			Integer slot = market.connectionSlot();
+			boolean onTheWire = market.state() == ScopeState.SUBSCRIBED
+					|| market.state() == ScopeState.LIVE;
+			if (onTheWire && slot != null && slot < maxConnections) {
+				home.merge(eventKey(market), slot, Math::min);
+			}
+		}
+		return home;
 	}
 
 	/**
@@ -185,15 +262,18 @@ class SubscriptionPlanner {
 	private static List<List<ScopedMarket>> byEvent(List<ScopedMarket> markets) {
 		Map<String, List<ScopedMarket>> events = new LinkedHashMap<>();
 		for (ScopedMarket market : markets) {
-			String key = market.eventId() == null ? "market:" + market.marketId()
-					: "event:" + market.eventId();
-			events.computeIfAbsent(key, k -> new ArrayList<>()).add(market);
+			events.computeIfAbsent(eventKey(market), k -> new ArrayList<>()).add(market);
 		}
 		List<List<ScopedMarket>> grouped = new ArrayList<>(events.values());
 		grouped.sort(Comparator
 				.<List<ScopedMarket>, Long>comparing(SubscriptionPlanner::earliestKickoffEpoch)
 				.thenComparing(event -> ids(event).getFirst()));
 		return grouped;
+	}
+
+	private static String eventKey(ScopedMarket market) {
+		return market.eventId() == null ? "market:" + market.marketId()
+				: "event:" + market.eventId();
 	}
 
 	private static long earliestKickoffEpoch(List<ScopedMarket> event) {

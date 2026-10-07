@@ -76,7 +76,7 @@ class PowerAssertionTest {
 		private StubAssertion(boolean enabled) {
 			super(new ScopeProperties(Duration.ofHours(4), Duration.ofHours(2), Duration.ofMinutes(15),
 					Duration.ofSeconds(10), Duration.ofMinutes(130), Duration.ofHours(6),
-					Duration.ofHours(48), Duration.ofMinutes(30), enabled, 3));
+					Duration.ofHours(48), Duration.ofMinutes(30), enabled, 3, 200, 1));
 		}
 
 		@Override

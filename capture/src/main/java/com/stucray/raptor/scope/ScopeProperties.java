@@ -60,6 +60,16 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *     regardless. The abandonment guard: it is what retires a fixture that was
  *     postponed after its market was created and therefore never went in-play,
  *     never closed, and would otherwise hold a slot forever.
+ * @param marketsPerConnection how many markets one stream connection may carry.
+ *     Betfair's default per subscription is 200, and a subscription above it is
+ *     refused whole rather than truncated, which is why the planner trims to it
+ *     rather than leaving it to the server. A setting because the account's
+ *     limit can differ from the default (#64).
+ * @param maxConnections how many stream connections scope may be partitioned
+ *     across, each in its own connection slot. The 10 connections an app key
+ *     allows are shared by every session on the key, whichever application
+ *     opened it (#63), so this is raptor's share of that budget, not the key's
+ *     whole allowance. One until the recorder can run several (#65, #67).
  */
 @ConfigurationProperties("raptor.scope")
 public record ScopeProperties(
@@ -72,7 +82,9 @@ public record ScopeProperties(
 		@DefaultValue("48h") Duration lookahead,
 		@DefaultValue("30m") Duration lookaheadInterval,
 		@DefaultValue("true") boolean holdPowerAssertion,
-		@DefaultValue("3") int pollFailuresBeforeRed) {
+		@DefaultValue("3") int pollFailuresBeforeRed,
+		@DefaultValue("200") int marketsPerConnection,
+		@DefaultValue("1") int maxConnections) {
 
 	public ScopeProperties {
 		if (horizon.isNegative() || horizon.isZero()) {
@@ -93,6 +105,13 @@ public record ScopeProperties(
 		if (pollFailuresBeforeRed < 1) {
 			// Zero would put the indicator red before a single poll had been tried.
 			throw new IllegalArgumentException("pollFailuresBeforeRed must be at least 1");
+		}
+		if (marketsPerConnection < 1) {
+			throw new IllegalArgumentException("marketsPerConnection must be at least 1");
+		}
+		if (maxConnections < 1) {
+			// Zero connections would plan nothing and capture nothing, silently.
+			throw new IllegalArgumentException("maxConnections must be at least 1");
 		}
 	}
 }
