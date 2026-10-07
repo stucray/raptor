@@ -20,6 +20,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -183,7 +184,7 @@ class RecorderSupervisorTest {
 				eq(GapCause.DISCONNECT), any());
 		// Every stream is its own session: two connections are two rows, which is
 		// what makes the space between them answerable.
-		verify(sessions, Mockito.atLeast(2)).begin(eq(CaptureOrigin.RESIDENT), any(), any());
+		verify(sessions, Mockito.atLeast(2)).begin(eq(CaptureOrigin.RESIDENT), any(), any(), any());
 	}
 
 	/**
@@ -250,8 +251,8 @@ class RecorderSupervisorTest {
 		suspendNanos.addAndGet(Duration.ofSeconds(10).toNanos());
 		Instant lastFrame = Instant.parse("2026-09-02T17:54:00Z");
 
-		requireNonNull(supervisor).reconnect(GapCause.SLEEP, lastFrame.plusSeconds(17));
-		requireNonNull(supervisor).reconnect(GapCause.SILENCE, lastFrame);
+		requireNonNull(supervisor).reconnect(0, GapCause.SLEEP, lastFrame.plusSeconds(17));
+		requireNonNull(supervisor).reconnect(0, GapCause.SILENCE, lastFrame);
 
 		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
 				verify(gaps).record(anyLong(), eq(lastFrame), any(), eq(GapCause.SLEEP), any()));
@@ -276,7 +277,7 @@ class RecorderSupervisorTest {
 		suspendWall.advance(Duration.ofMinutes(6));
 		suspendNanos.addAndGet(Duration.ofSeconds(10).toNanos());
 
-		requireNonNull(supervisor).reconnect(GapCause.SILENCE,
+		requireNonNull(supervisor).reconnect(0, GapCause.SILENCE,
 				Instant.parse("2026-09-02T17:54:00Z"));
 
 		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
@@ -297,7 +298,7 @@ class RecorderSupervisorTest {
 		supervisor.start();
 		awaitRecording();
 
-		requireNonNull(supervisor).reconnect(GapCause.SILENCE,
+		requireNonNull(supervisor).reconnect(0, GapCause.SILENCE,
 				Instant.parse("2026-09-02T17:54:00Z"));
 
 		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
@@ -367,7 +368,7 @@ class RecorderSupervisorTest {
 		awaitRecording();
 		Instant sleptFrom = Instant.parse("2026-09-02T17:30:00Z");
 
-		supervisor.reconnect(GapCause.SLEEP, sleptFrom);
+		supervisor.reconnect(0, GapCause.SLEEP, sleptFrom);
 
 		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
 				verify(gaps).record(anyLong(), eq(sleptFrom), any(), eq(GapCause.SLEEP), any()));
@@ -572,6 +573,119 @@ class RecorderSupervisorTest {
 		assertThat(opened.get() - afterBackoff).isLessThan(15);
 	}
 
+	/**
+	 * One session per connection slot, and the row says which (#65).
+	 *
+	 * <p>Separate sessions are what keep {@code seq} a total order: it counts
+	 * within a session, so two connections writing under one session would
+	 * interleave two counters and collide on the key.
+	 */
+	@Test
+	@Timeout(30)
+	void eachConnectionSlotRecordsAsItsOwnSession() {
+		when(lease.acquire()).thenReturn(true);
+		supervisor = supervisor(slots(2, slot -> endless()), true);
+
+		supervisor.start();
+
+		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+				assertThat(requireNonNull(supervisor).recordings()).containsOnlyKeys(0, 1));
+		Map<Integer, Recording> recordings = requireNonNull(supervisor).recordings();
+		assertThat(recordings.get(0).sessionId()).isNotEqualTo(recordings.get(1).sessionId());
+		verify(sessions).begin(eq(CaptureOrigin.RESIDENT), any(), any(), eq(0));
+		verify(sessions).begin(eq(CaptureOrigin.RESIDENT), any(), any(), eq(1));
+	}
+
+	/**
+	 * A reconnect asked for one connection is that connection's alone (#65).
+	 *
+	 * <p>The gap goes against slot 1's session with slot 1's cause and start, and
+	 * slot 0's recording is the same one afterwards, untouched. With one pending
+	 * gap for the whole recorder, a request for one connection could be taken by
+	 * the other's loop and written against the wrong session.
+	 */
+	@Test
+	@Timeout(30)
+	void aReconnectOnOneSlotIsRecordedAgainstThatSlotAlone() {
+		when(lease.acquire()).thenReturn(true);
+		supervisor = supervisor(slots(2, slot -> endless()), true);
+		supervisor.start();
+		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+				assertThat(requireNonNull(supervisor).recordings()).containsOnlyKeys(0, 1));
+		Recording slotZero = requireNonNull(supervisor).recordings().get(0);
+		long slotOneSession = requireNonNull(supervisor).recordings().get(1).sessionId();
+		Instant since = Instant.parse("2026-09-02T17:58:00Z");
+
+		requireNonNull(supervisor).reconnect(1, GapCause.SILENCE, since);
+
+		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+				verify(gaps).record(eq(slotOneSession), eq(since), any(), eq(GapCause.SILENCE),
+						any()));
+		verify(gaps, never()).record(eq(slotZero.sessionId()), any(), any(), any(), any());
+		assertThat(requireNonNull(supervisor).recordings().get(0)).isSameAs(slotZero);
+	}
+
+	/**
+	 * An extra connection that finishes is an orderly end, not a lost stream
+	 * (#65, decision D3 on #63).
+	 *
+	 * <p>It closed because its plan emptied, to give its slot back to the key:
+	 * the session ends COMPLETED and no gap is written, exactly as for a tidy
+	 * shutdown, and the slot then waits for its next fixture.
+	 */
+	@Test
+	@Timeout(30)
+	void anExtraConnectionThatFinishesLeavesNoGap() {
+		when(lease.acquire()).thenReturn(true);
+		AtomicInteger openedOne = new AtomicInteger();
+		supervisor = supervisor(slots(2, slot -> {
+			if (slot == 0) {
+				return endless();
+			}
+			openedOne.incrementAndGet();
+			return finishing(3);
+		}), true);
+
+		supervisor.start();
+
+		Awaitility.await().atMost(Duration.ofSeconds(10))
+				.untilAsserted(() -> assertThat(openedOne.get()).isGreaterThanOrEqualTo(2));
+		verify(sessions, Mockito.atLeastOnce()).end(anyLong(), eq("COMPLETED"), any());
+		verify(gaps, never()).record(anyLong(), any(), any(), any(), any());
+	}
+
+	/**
+	 * A refused connection leaves only that slot down (#65).
+	 *
+	 * <p>The key's connections are shared by every session on it, so slot 1 can
+	 * be refused while slot 0 records — and slot 0 must go on recording, in the
+	 * same session, while slot 1 retries.
+	 */
+	@Test
+	@Timeout(30)
+	void aRefusedConnectionLeavesTheOtherSlotRecording() {
+		when(lease.acquire()).thenReturn(true);
+		AtomicInteger refused = new AtomicInteger();
+		supervisor = supervisor(slots(2, slot -> {
+			if (slot == 0) {
+				return endless();
+			}
+			refused.incrementAndGet();
+			throw new IOException("Betfair stream failure: no connections available");
+		}), true);
+		supervisor.start();
+		awaitRecording();
+		Recording slotZero = requireNonNull(supervisor).recordings().get(0);
+
+		Awaitility.await().atMost(Duration.ofSeconds(10))
+				.untilAsserted(() -> assertThat(refused.get()).isGreaterThanOrEqualTo(3));
+
+		assertThat(requireNonNull(supervisor).recordings()).containsOnlyKeys(0);
+		assertThat(requireNonNull(supervisor).recordings().get(0)).isSameAs(slotZero);
+		assertThat(requireNonNull(supervisor).state()).isEqualTo(RecorderState.RECORDING);
+		verify(gaps, never()).record(anyLong(), any(), any(), any(), any());
+	}
+
 	private void awaitRecording() {
 		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
 				assertThat(supervisor).isNotNull()
@@ -614,7 +728,7 @@ class RecorderSupervisorTest {
 
 	private RecorderSupervisor supervisor(@Nullable StreamSourceFactory factory, boolean enabled,
 			Duration reconnectDelay, Duration reconnectDelayMax) {
-		when(sessions.begin(any(), any(), any())).thenAnswer(call -> nextSessionId.getAndIncrement());
+		when(sessions.begin(any(), any(), any(), any())).thenAnswer(call -> nextSessionId.getAndIncrement());
 		RecorderProperties properties = properties(enabled, reconnectDelay, reconnectDelayMax);
 		RecorderPipeline pipeline = new RecorderPipeline(writer, new NoOpTransactions(),
 				new CollectingSpillSink(), new CollectingQuarantine(), properties, sessions, CLOCK,
@@ -646,7 +760,7 @@ class RecorderSupervisorTest {
 			}
 
 			@Override
-			public StreamSource open() throws IOException {
+			public StreamSource open(int connectionSlot) throws IOException {
 				return opener.open();
 			}
 		};
@@ -665,12 +779,12 @@ class RecorderSupervisorTest {
 			}
 
 			@Override
-			public @Nullable Instant awaitingSince() {
+			public @Nullable Instant awaitingSince(int connectionSlot) {
 				return awaiting.get();
 			}
 
 			@Override
-			public StreamSource open() throws IOException {
+			public StreamSource open(int connectionSlot) throws IOException {
 				try {
 					release.await();
 				} catch (InterruptedException e) {
@@ -680,6 +794,36 @@ class RecorderSupervisorTest {
 				return endless();
 			}
 		};
+	}
+
+	/** A factory holding {@code count} connection slots, opened per slot. */
+	private static StreamSourceFactory slots(int count, SlotOpener opener) {
+		return new StreamSourceFactory() {
+			@Override
+			public String describe() {
+				return "slots";
+			}
+
+			@Override
+			public int connectionSlots() {
+				return count;
+			}
+
+			@Override
+			public StreamSource open(int connectionSlot) throws IOException {
+				return opener.open(connectionSlot);
+			}
+		};
+	}
+
+	@FunctionalInterface
+	private interface SlotOpener {
+		StreamSource open(int connectionSlot) throws IOException;
+	}
+
+	/** A source that ends by design, the way an extra connection with nothing left does. */
+	private static StreamSource finishing(int frames) {
+		return new FakeSource(frames, true);
 	}
 
 	@FunctionalInterface
@@ -700,10 +844,21 @@ class RecorderSupervisorTest {
 	private static final class FakeSource implements StreamSource {
 
 		private final int frames;
+		private final boolean finishes;
 		private int emitted;
 
 		FakeSource(int frames) {
+			this(frames, false);
+		}
+
+		FakeSource(int frames, boolean finishes) {
 			this.frames = frames;
+			this.finishes = finishes;
+		}
+
+		@Override
+		public boolean finished() {
+			return finishes && emitted >= frames;
 		}
 
 		@Override

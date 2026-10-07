@@ -85,7 +85,15 @@ class RecorderPipeline {
 	 * close it; closing is what commits the tail and stamps the session's end.
 	 */
 	Recording start(StreamSource source, CaptureOrigin origin) {
-		long sessionId = sessions.begin(origin, configJson(source), buildVersion());
+		return start(source, origin, null);
+	}
+
+	/**
+	 * Start recording from a source on one connection slot, which the session's
+	 * row records (#65); null for a source that is not a live connection.
+	 */
+	Recording start(StreamSource source, CaptureOrigin origin, @Nullable Integer connectionSlot) {
+		long sessionId = sessions.begin(origin, configJson(source), buildVersion(), connectionSlot);
 		BlockingQueue<RawMessage> queue = new ArrayBlockingQueue<>(properties.queueCapacity());
 
 		RawWriteLoop writeLoop = new RawWriteLoop(queue, writer, transactions, spill, quarantine,

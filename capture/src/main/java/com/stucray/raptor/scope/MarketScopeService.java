@@ -458,4 +458,10 @@ class MarketScopeService implements CaptureScope, ScopeDiscovery {
 	public void subscribed(int connectionSlot, List<String> marketIds) {
 		scopes.subscribed(connectionSlot, marketIds);
 	}
+
+	/** {@code raptor.scope.max-connections}: the slots the planner may fill. */
+	@Override
+	public int connectionSlots() {
+		return properties.maxConnections();
+	}
 }

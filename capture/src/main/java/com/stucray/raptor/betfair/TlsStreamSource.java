@@ -56,11 +56,6 @@ final class TlsStreamSource implements StreamSource {
 	/** How long the maintainer sleeps in one go, so close() is not waited on. */
 	private static final Duration SLICE = Duration.ofSeconds(1);
 
-	/**
-	 * The connection slot this connection subscribes for. Always 0 for now: the
-	 * recorder holds one connection until #65 gives each slot its own.
-	 */
-	private static final int CONNECTION_SLOT = 0;
 
 	private final StreamConnection connection;
 	private final BetfairSession session;
@@ -78,17 +73,26 @@ final class TlsStreamSource implements StreamSource {
 	private volatile @Nullable String clk;
 	private volatile List<String> subscribed = List.of();
 	private volatile boolean closed;
+	/** Ended by design: an extra connection whose plan emptied (#65). */
+	private volatile boolean finished;
 	private volatile @Nullable Thread maintainer;
+
+	/**
+	 * The connection slot this connection subscribes for: raptor's own number
+	 * for it, whose share of the plan it carries and reports as subscribed.
+	 */
+	private final int connectionSlot;
 
 	TlsStreamSource(StreamConnection connection, BetfairSession session,
 			BetfairProperties betfair, StreamProperties properties, CaptureScope scope,
-			Clock clock, Resume resume) {
+			Clock clock, int connectionSlot, Resume resume) {
 		this.connection = connection;
 		this.session = session;
 		this.betfair = betfair;
 		this.properties = properties;
 		this.scope = scope;
 		this.clock = clock;
+		this.connectionSlot = connectionSlot;
 		this.initialClk = resume.initialClk();
 		this.clk = resume.clk();
 	}
@@ -174,10 +178,12 @@ final class TlsStreamSource implements StreamSource {
 		while (true) {
 			String line = pending.pollFirst();
 			if (line == null) {
-				line = connection.readLine();
+				line = readLine();
 			}
 			if (line == null) {
-				log.info("Betfair closed the stream; the supervisor will rebuild it");
+				if (!finished) {
+					log.info("Betfair closed the stream; the supervisor will rebuild it");
+				}
 				return null;
 			}
 			JsonNode message = parse(line);
@@ -241,6 +247,42 @@ final class TlsStreamSource implements StreamSource {
 		throw new IOException("Betfair stream failure: " + code);
 	}
 
+	/**
+	 * A line off the socket, or {@code null} once this connection has finished.
+	 *
+	 * <p>Finishing closes the socket from the subscription thread while this one
+	 * may be blocked reading it, and that read then fails. That failure is the
+	 * finish arriving, not a lost stream, so it ends the source quietly.
+	 */
+	private @Nullable String readLine() throws IOException {
+		try {
+			return connection.readLine();
+		} catch (IOException e) {
+			if (finished) {
+				return null;
+			}
+			throw e;
+		}
+	}
+
+	/** Close this connection because its plan has emptied. */
+	private void finish() {
+		log.info("connection slot {} has nothing left to carry; closing it and returning the "
+				+ "slot to the key", connectionSlot);
+		finished = true;
+		closed = true;
+		try {
+			connection.close();
+		} catch (IOException e) {
+			log.debug("a finished connection did not close cleanly", e);
+		}
+	}
+
+	@Override
+	public boolean finished() {
+		return finished;
+	}
+
 	/** Keep the resume point current. */
 	private void remember(JsonNode message) {
 		String freshInitial = text(message, "initialClk");
@@ -295,15 +337,24 @@ final class TlsStreamSource implements StreamSource {
 	 */
 	void follow() throws IOException {
 		SubscriptionPlan plan = scope.plan();
-		List<String> wanted = plan.marketIds(CONNECTION_SLOT);
+		List<String> wanted = plan.marketIds(connectionSlot);
 		if (wanted.equals(subscribed)) {
+			return;
+		}
+		if (wanted.isEmpty() && connectionSlot > 0) {
+			// An extra connection with nothing left to carry closes, and returns its
+			// slot to the app key's allowance, which every session on the key shares
+			// (#63). Ended here, by design, so the supervisor records an orderly end
+			// rather than a lost stream.
+			finish();
 			return;
 		}
 		if (wanted.isEmpty()) {
 			// Everything in the last subscription has finished. Sending an empty
 			// marketSubscription would replace a harmless subscription to closed
 			// markets with a request Betfair has no good answer to; the markets
-			// themselves have already stopped sending.
+			// themselves have already stopped sending. Slot 0 keeps its connection:
+			// it is the one the recorder always holds.
 			log.info("nothing in scope; keeping the current subscription of {} market(s)",
 					subscribed.size());
 			return;
@@ -317,7 +368,7 @@ final class TlsStreamSource implements StreamSource {
 	}
 
 	private void subscribe(SubscriptionPlan plan, Resume from) throws IOException {
-		List<String> marketIds = plan.marketIds(CONNECTION_SLOT);
+		List<String> marketIds = plan.marketIds(connectionSlot);
 		Map<String, Object> subscription = new LinkedHashMap<>();
 		subscription.put("op", "marketSubscription");
 		subscription.put("marketFilter", Map.of("marketIds", marketIds));
@@ -340,7 +391,7 @@ final class TlsStreamSource implements StreamSource {
 		// After the send, never before: a market recorded as subscribed that the
 		// server refused would be protected from the next trim by the very tier
 		// that exists to protect markets actually being recorded.
-		scope.subscribed(CONNECTION_SLOT, marketIds);
+		scope.subscribed(connectionSlot, marketIds);
 		if (plan.droppedRequestedEvents() > 0) {
 			log.warn("{} requested event(s) did not fit in the subscription",
 					plan.droppedRequestedEvents());

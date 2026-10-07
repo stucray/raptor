@@ -24,15 +24,27 @@ public interface StreamSourceFactory {
 	String describe();
 
 	/**
-	 * Open a stream.
+	 * How many connections this factory may hold at once, each in its own
+	 * connection slot (0, 1, ...). The supervisor runs one connection per slot.
+	 */
+	default int connectionSlots() {
+		return 1;
+	}
+
+	/**
+	 * Open a stream for one connection slot.
 	 *
+	 * @param connectionSlot raptor's own number for the connection, stable across
+	 *     reconnects: each slot carries its own markets and resumes from its own
+	 *     clock (#65)
 	 * @throws IOException if the stream could not be opened; the supervisor waits
 	 *     and tries again rather than giving up on the night
 	 */
-	StreamSource open() throws IOException;
+	StreamSource open(int connectionSlot) throws IOException;
 
 	/**
-	 * When {@code open()} started waiting for something to connect to, or
+	 * When {@code open(connectionSlot)} started waiting for something to connect
+	 * to, or
 	 * {@code null} when it is not waiting.
 	 *
 	 * <p>The supervisor cannot see this for itself: it calls {@code open()} and
@@ -42,11 +54,13 @@ public interface StreamSourceFactory {
 	 * the wait began — so it answers both here, in one method, rather than
 	 * leaving the supervisor to stamp a transition it never observes.
 	 *
+	 * <p>Per connection slot, because each slot waits for its own markets.
+	 *
 	 * <p>The default is "never waiting", which is the truth for a factory that
 	 * always has something to connect to, such as a replay of files already on
 	 * disk.
 	 */
-	default @Nullable Instant awaitingSince() {
+	default @Nullable Instant awaitingSince(int connectionSlot) {
 		return null;
 	}
 }

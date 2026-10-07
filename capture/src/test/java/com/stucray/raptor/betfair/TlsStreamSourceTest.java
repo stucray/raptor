@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatIOException;
 
 import com.stucray.raptor.recorder.StreamFrame;
 import com.stucray.raptor.scope.CaptureScope;
+import com.stucray.raptor.scope.ConnectionSubscription;
 import com.stucray.raptor.scope.SubscriptionPlan;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -222,7 +223,7 @@ class TlsStreamSourceTest {
 
 	private TlsStreamSource source(TlsStreamSource.Resume resume) {
 		return new TlsStreamSource(connection, session, properties(), streamProperties(), scope,
-				Clock.fixed(NOW, ZoneOffset.UTC), resume);
+				Clock.fixed(NOW, ZoneOffset.UTC), 0, resume);
 	}
 
 	private static SubscriptionPlan plan(String... marketIds) {
@@ -281,6 +282,70 @@ class TlsStreamSourceTest {
 			slots.add(connectionSlot);
 			subscribed.add(List.copyOf(marketIds));
 		}
+	}
+
+	/**
+	 * A connection subscribes its own slot's markets and reports them as that
+	 * slot's (#65): the other slot's markets are another connection's business.
+	 */
+	@Test
+	void anExtraConnectionSubscribesOnlyItsOwnSlotsMarkets() throws IOException {
+		connection.deliver(AUTHENTICATED);
+		scope.plan = twoSlots(List.of("1.240"), List.of("1.241"));
+
+		source(1, TlsStreamSource.Resume.NONE).open();
+
+		assertThat(connection.sent(1)).containsEntry("marketFilter",
+				Map.of("marketIds", List.of("1.241")));
+		assertThat(scope.subscribed).containsExactly(List.of("1.241"));
+		assertThat(scope.slots).containsExactly(1);
+	}
+
+	/**
+	 * An extra connection with nothing left to carry closes, and says it ended by
+	 * design (#65, decision D3 on #63).
+	 *
+	 * <p>Its slot goes back to the key's allowance, which every session on the
+	 * key shares, so holding it open like slot 0 does would spend a connection on
+	 * nothing. It sends nothing on the way out: an empty subscription is a request
+	 * Betfair has no good answer to.
+	 */
+	@Test
+	void anExtraConnectionFinishesWhenItsPlanEmpties() throws IOException {
+		connection.deliver(AUTHENTICATED);
+		scope.plan = twoSlots(List.of("1.240"), List.of("1.241"));
+		TlsStreamSource source = source(1, TlsStreamSource.Resume.NONE);
+		source.open();
+
+		scope.plan = twoSlots(List.of("1.240"), List.of());
+		source.follow();
+
+		assertThat(source.finished()).isTrue();
+		assertThat(source.next()).as("a finished connection is exhausted").isNull();
+		assertThat(connection.sends).hasSize(2);
+	}
+
+	/** Slot 0 never finishes: it is the connection the recorder always holds. */
+	@Test
+	void slotZeroDoesNotFinishWhenItsPlanEmpties() throws IOException {
+		connection.deliver(AUTHENTICATED);
+		scope.plan = plan("1.240");
+		TlsStreamSource source = open();
+
+		scope.plan = plan();
+		source.follow();
+
+		assertThat(source.finished()).isFalse();
+	}
+
+	private TlsStreamSource source(int connectionSlot, TlsStreamSource.Resume resume) {
+		return new TlsStreamSource(connection, session, properties(), streamProperties(), scope,
+				Clock.fixed(NOW, ZoneOffset.UTC), connectionSlot, resume);
+	}
+
+	private static SubscriptionPlan twoSlots(List<String> slotZero, List<String> slotOne) {
+		return new SubscriptionPlan(List.of(new ConnectionSubscription(0, slotZero),
+				new ConnectionSubscription(1, slotOne)), 0, 0);
 	}
 
 	/** Lines in, lines out. The socket, with the socket taken out. */

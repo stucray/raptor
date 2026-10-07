@@ -86,7 +86,7 @@ class BetfairStreamLiveSmokeTest {
 
 		int frames = 0;
 		String describe;
-		try (var source = factory.open()) {
+		try (var source = factory.open(0)) {
 			describe = source.describe();
 			long deadline = System.nanoTime() + LISTEN.toNanos();
 			while (System.nanoTime() < deadline) {

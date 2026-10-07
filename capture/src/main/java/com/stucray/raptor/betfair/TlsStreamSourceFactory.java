@@ -8,6 +8,8 @@ import java.net.InetSocketAddress;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
@@ -47,7 +49,7 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 	private final Clock clock;
 
 	/**
-	 * When the wait for scope began, or {@code null} while not waiting.
+	 * When each connection slot's wait for scope began; absent while not waiting.
 	 *
 	 * <p>Read by the supervisor to tell "idle by design" from "cannot reach
 	 * Betfair" — two conditions that used to share the word RECONNECTING (#144).
@@ -55,18 +57,44 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 	 * normal?": four minutes of it on a matchday evening is not the same news as
 	 * four hours of it overnight.
 	 */
-	private volatile @Nullable Instant idleSince;
+	private final Map<Integer, Instant> idleSince = new ConcurrentHashMap<>();
 
-	/** The source in flight, so the next one can resume where it left off. */
-	private volatile @Nullable TlsStreamSource last;
+	/**
+	 * Each connection slot's source in flight, so the next one on that slot can
+	 * resume where it left off. Per slot because each connection carries its own
+	 * markets, and a clock handed to another slot would resume a delta against a
+	 * market set that connection never subscribed (#65).
+	 */
+	private final Map<Integer, TlsStreamSource> last = new ConcurrentHashMap<>();
+
+	/** Opens the connection a source talks over. */
+	@FunctionalInterface
+	interface Connector {
+		StreamConnection connect() throws IOException;
+	}
+
+	private final Connector connector;
 
 	TlsStreamSourceFactory(BetfairSession session, BetfairProperties betfair,
 			StreamProperties properties, CaptureScope scope, Clock clock) {
+		this(session, betfair, properties, scope, clock,
+				() -> new SocketConnection(connect(properties),
+						properties.host() + ":" + properties.port()));
+	}
+
+	/**
+	 * With the socket supplied, so a test can script a connection per slot and
+	 * watch what each one is asked to resume from — the TLS handshake is the one
+	 * part of this class a test cannot stand in for.
+	 */
+	TlsStreamSourceFactory(BetfairSession session, BetfairProperties betfair,
+			StreamProperties properties, CaptureScope scope, Clock clock, Connector connector) {
 		this.session = session;
 		this.betfair = betfair;
 		this.properties = properties;
 		this.scope = scope;
 		this.clock = clock;
+		this.connector = connector;
 	}
 
 	@Override
@@ -75,13 +103,18 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 	}
 
 	@Override
-	public @Nullable Instant awaitingSince() {
-		return idleSince;
+	public int connectionSlots() {
+		return scope.connectionSlots();
 	}
 
 	@Override
-	public StreamSource open() throws IOException {
-		awaitScope();
+	public @Nullable Instant awaitingSince(int connectionSlot) {
+		return idleSince.get(connectionSlot);
+	}
+
+	@Override
+	public StreamSource open(int connectionSlot) throws IOException {
+		awaitScope(connectionSlot);
 		// The token BEFORE the socket (#12). The authentication message needs it,
 		// and Betfair starts timing an unauthenticated connection the moment it
 		// accepts one: a login that takes a while on a bad network then costs the
@@ -95,12 +128,15 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 		} catch (BetfairException e) {
 			throw new IOException("Betfair login failed before connecting: " + e.getMessage(), e);
 		}
-		TlsStreamSource previous = last;
-		SSLSocket socket = connect();
-		TlsStreamSource source = new TlsStreamSource(
-				new SocketConnection(socket, properties.host() + ":" + properties.port()),
-				session, betfair, properties, scope, clock,
-				previous == null ? TlsStreamSource.Resume.NONE : previous.resume());
+		TlsStreamSource previous = last.get(connectionSlot);
+		StreamConnection connection = connector.connect();
+		// A connection that closed because it had nothing left to carry resumes
+		// nothing: whatever it carries next is a different market set, owed a full
+		// image rather than a delta against the old one.
+		TlsStreamSource.Resume resume = previous == null || previous.finished()
+				? TlsStreamSource.Resume.NONE : previous.resume();
+		TlsStreamSource source = new TlsStreamSource(connection, session, betfair, properties,
+				scope, clock, connectionSlot, resume);
 		boolean opened = false;
 		try {
 			source.open();
@@ -114,23 +150,31 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 				closeQuietly(source);
 			}
 		}
-		last = source;
+		last.put(connectionSlot, source);
 		return source;
 	}
 
 	/**
 	 * Wait until there is something to subscribe to.
 	 *
-	 * <p>On the supervisor's thread, deliberately: that thread exists to wait, and
+	 * <p>For one connection slot, which waits for markets of its own: slot 0 for
+	 * anything in scope, an extra slot until the plan has more than the slots
+	 * before it can carry.
+	 *
+	 * <p>On the connection's own thread, deliberately: that thread exists to wait, and
 	 * everything that must not wait is inside the recording it starts. Said once
 	 * per idle period rather than per attempt — a log line every thirty seconds
 	 * through a Tuesday is how a log stops being read.
 	 */
-	private void awaitScope() throws IOException {
-		while (scope.plan().marketIds().isEmpty()) {
-			if (idleSince == null) {
-				idleSince = clock.instant();
-				log.info("nothing in scope; the stream opens when a fixture enters the horizon");
+	private void awaitScope(int connectionSlot) throws IOException {
+		while (scope.plan().marketIds(connectionSlot).isEmpty()) {
+			if (idleSince.putIfAbsent(connectionSlot, clock.instant()) == null) {
+				if (connectionSlot == 0) {
+					log.info("nothing in scope; the stream opens when a fixture enters the horizon");
+				} else {
+					log.info("connection slot {} has nothing to carry; it opens when the plan "
+							+ "gives it a fixture", connectionSlot);
+				}
 			}
 			try {
 				Thread.sleep(IDLE_POLL);
@@ -139,10 +183,10 @@ final class TlsStreamSourceFactory implements StreamSourceFactory {
 				throw new IOException("interrupted while waiting for a fixture", e);
 			}
 		}
-		idleSince = null;
+		idleSince.remove(connectionSlot);
 	}
 
-	private SSLSocket connect() throws IOException {
+	private static SSLSocket connect(StreamProperties properties) throws IOException {
 		SSLSocket socket = (SSLSocket) SSLSocketFactory.getDefault().createSocket();
 		try {
 			socket.connect(new InetSocketAddress(properties.host(), properties.port()),
