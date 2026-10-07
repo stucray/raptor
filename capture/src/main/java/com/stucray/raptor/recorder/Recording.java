@@ -45,6 +45,11 @@ public final class Recording implements AutoCloseable {
 		this.sessions = sessions;
 	}
 
+	/** Whether the source ended by design, having nothing left to carry. */
+	public boolean finished() {
+		return source.finished();
+	}
+
 	public long sessionId() {
 		return sessionId;
 	}

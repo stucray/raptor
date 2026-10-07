@@ -3,6 +3,7 @@ package com.stucray.raptor.recorder;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,25 +77,30 @@ class StreamWatchdog {
 		// later can still be named SLEEP.
 		SuspendClock.Suspend slept = suspends.sample();
 
-		Recording current = supervisor.current();
-		if (current == null) {
-			// Nothing to tear down. The measurement is not lost by returning here:
-			// either the supervisor has already consulted SuspendClock while writing
-			// the gap, or it is about to and will find the sample above.
-			return;
-		}
+		// Every connection, each on its own evidence (#65). With none recording
+		// there is nothing to tear down, and the measurement is not lost: either the
+		// supervisor has already consulted SuspendClock while writing the gap, or it
+		// is about to and will find the sample above.
+		supervisor.recordings().forEach((slot, current) -> check(slot, current, wall, slept));
+	}
+
+	private void check(int slot, Recording current, Instant wall,
+			SuspendClock.@Nullable Suspend slept) {
 		if (slept != null) {
-			log.warn("the machine appears to have suspended for {}s; tearing the stream down",
-					slept.duration().toSeconds());
-			supervisor.reconnect(GapCause.SLEEP, slept.from());
+			// A suspend stops every connection at once, so each is torn down and each
+			// records its own SLEEP gap against its own session.
+			log.warn("the machine appears to have suspended for {}s; tearing the stream on "
+					+ "connection slot {} down", slept.duration().toSeconds(), slot);
+			supervisor.reconnect(slot, GapCause.SLEEP, slept.from());
 			return;
 		}
 		Instant lastFrame = current.lastFrameAt();
 		Duration silence = Duration.between(lastFrame, wall);
 		if (silence.compareTo(properties.silenceTimeout()) > 0) {
-			log.warn("no frame for {}s (timeout {}s); the socket claims to be alive and is not",
-					silence.toSeconds(), properties.silenceTimeout().toSeconds());
-			supervisor.reconnect(GapCause.SILENCE, lastFrame);
+			log.warn("no frame for {}s on connection slot {} (timeout {}s); the socket claims to "
+					+ "be alive and is not", silence.toSeconds(), slot,
+					properties.silenceTimeout().toSeconds());
+			supervisor.reconnect(slot, GapCause.SILENCE, lastFrame);
 			return;
 		}
 		heartbeat(current.sessionId());

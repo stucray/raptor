@@ -3,10 +3,10 @@
     "tool": "pmd",
     "tool_version": "7.24.0",
     "ruleset": "pmd-ruleset.xml",
-    "total_findings": 80,
+    "total_findings": 81,
     "by_priority": {
       "2": 5,
-      "3": 75
+      "3": 76
     }
   },
   "findings": [
@@ -138,8 +138,8 @@
       "class": "TlsStreamSource",
       "method": "awaitAuthentication",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 150,
-      "end_line": 150,
+      "begin_line": 154,
+      "end_line": 154,
       "message": "Avoid using literals such as \"status\" in if statements"
     },
     {
@@ -150,8 +150,8 @@
       "class": "TlsStreamSource",
       "method": "awaitAuthentication",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 159,
-      "end_line": 159,
+      "begin_line": 163,
+      "end_line": 163,
       "message": "Avoid using literals such as \"connection\" in if statements"
     },
     {
@@ -162,8 +162,8 @@
       "class": "TlsStreamSource",
       "method": "checkStatus",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 229,
-      "end_line": 229,
+      "begin_line": 235,
+      "end_line": 235,
       "message": "Avoid using literals such as \"SUBSCRIPTION_LIMIT_EXCEEDED\" in if statements"
     },
     {
@@ -174,8 +174,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 191,
-      "end_line": 191,
+      "begin_line": 197,
+      "end_line": 197,
       "message": "Avoid using literals such as \"mcm\" in if statements"
     },
     {
@@ -186,8 +186,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 195,
-      "end_line": 195,
+      "begin_line": 201,
+      "end_line": 201,
       "message": "Avoid using literals such as \"status\" in if statements"
     },
     {
@@ -198,8 +198,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 199,
-      "end_line": 199,
+      "begin_line": 205,
+      "end_line": 205,
       "message": "Avoid using literals such as \"connection\" in if statements"
     },
     {
@@ -222,8 +222,8 @@
       "class": "RecorderSupervisor",
       "method": "backoff",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 352,
-      "end_line": 352,
+      "begin_line": 507,
+      "end_line": 507,
       "message": "Avoid using literals such as 2 in if statements"
     },
     {
@@ -330,8 +330,8 @@
       "class": "TlsStreamSourceFactory",
       "method": "open",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 98,
-      "end_line": 98,
+      "begin_line": 131,
+      "end_line": 131,
       "message": "Ensure that resources like this TlsStreamSource object are closed after use"
     },
     {
@@ -342,9 +342,9 @@
       "class": "TlsStreamSourceFactory",
       "method": "open",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 99,
-      "end_line": 99,
-      "message": "Ensure that resources like this SSLSocket object are closed after use"
+      "begin_line": 132,
+      "end_line": 132,
+      "message": "Ensure that resources like this StreamConnection object are closed after use"
     },
     {
       "rule": "CloseResource",
@@ -436,10 +436,22 @@
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
       "class": "RecorderSupervisor",
+      "method": "recordings",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
+      "begin_line": 170,
+      "end_line": 170,
+      "message": "Ensure that resources like this Recording object are closed after use"
+    },
+    {
+      "rule": "CloseResource",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderSupervisor.Connection",
       "method": "consecutiveFailedAttempts",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 472,
-      "end_line": 472,
+      "begin_line": 462,
+      "end_line": 462,
       "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
@@ -447,11 +459,11 @@
       "ruleset": "Error Prone",
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
+      "class": "RecorderSupervisor.Connection",
       "method": "reconnect",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 156,
-      "end_line": 156,
+      "begin_line": 214,
+      "end_line": 214,
       "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
@@ -459,11 +471,11 @@
       "ruleset": "Error Prone",
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
-      "method": "stop",
+      "class": "RecorderSupervisor.Connection",
+      "method": "requestStop",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 373,
-      "end_line": 373,
+      "begin_line": 470,
+      "end_line": 470,
       "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
@@ -471,11 +483,11 @@
       "ruleset": "Error Prone",
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
+      "class": "RecorderSupervisor.Connection",
       "method": "supervise",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 177,
-      "end_line": 177,
+      "begin_line": 235,
+      "end_line": 235,
       "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
@@ -483,24 +495,12 @@
       "ruleset": "Error Prone",
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
+      "class": "RecorderSupervisor.Connection",
       "method": "supervise",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 179,
-      "end_line": 179,
+      "begin_line": 237,
+      "end_line": 237,
       "message": "Ensure that resources like this StreamSource object are closed after use"
-    },
-    {
-      "rule": "CloseResource",
-      "ruleset": "Error Prone",
-      "priority": 3,
-      "package": "com.stucray.raptor.recorder",
-      "class": "StreamWatchdog",
-      "method": "check",
-      "file": "src/main/java/com/stucray/raptor/recorder/StreamWatchdog.java",
-      "begin_line": 79,
-      "end_line": 79,
-      "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
       "rule": "CloseResource",
@@ -542,6 +542,18 @@
       "rule": "CognitiveComplexity",
       "ruleset": "Design",
       "priority": 3,
+      "package": "com.stucray.raptor.betfair",
+      "class": "TlsStreamSource",
+      "method": "next",
+      "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
+      "begin_line": 177,
+      "end_line": 177,
+      "message": "The method 'next()' has a cognitive complexity of 16, current threshold is 15"
+    },
+    {
+      "rule": "CognitiveComplexity",
+      "ruleset": "Design",
+      "priority": 3,
       "package": "com.stucray.raptor.ingest",
       "class": "CaptureMessageExtractor",
       "method": "extract",
@@ -570,8 +582,8 @@
       "class": "TlsStreamSource",
       "method": "checkStatus",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 212,
-      "end_line": 212,
+      "begin_line": 218,
+      "end_line": 218,
       "message": "The method 'checkStatus(JsonNode)' has a cyclomatic complexity of 10."
     },
     {
@@ -591,11 +603,11 @@
       "ruleset": "Design",
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
+      "class": "RecorderSupervisor.Connection",
       "method": "closeAndRecord",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 233,
-      "end_line": 233,
+      "begin_line": 291,
+      "end_line": 291,
       "message": "The method 'closeAndRecord(Recording)' has a cyclomatic complexity of 12."
     },
     {
@@ -644,7 +656,7 @@
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
       "begin_line": 50,
       "end_line": 50,
-      "message": "Possible God Class (WMC=60, ATFD=6, TCC=31.667%)"
+      "message": "Possible God Class (WMC=70, ATFD=7, TCC=31.579%)"
     },
     {
       "rule": "ImplicitFunctionalInterface",
@@ -714,20 +726,8 @@
       "class": "TlsStreamSource",
       "method": "close",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 396,
-      "end_line": 396,
-      "message": "Assigning an Object to null is a code smell.  Consider refactoring."
-    },
-    {
-      "rule": "NullAssignment",
-      "ruleset": "Error Prone",
-      "priority": 3,
-      "package": "com.stucray.raptor.betfair",
-      "class": "TlsStreamSourceFactory",
-      "method": "awaitScope",
-      "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 142,
-      "end_line": 142,
+      "begin_line": 447,
+      "end_line": 447,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -772,10 +772,22 @@
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
       "class": "RecorderSupervisor",
+      "method": "stop",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
+      "begin_line": 536,
+      "end_line": 536,
+      "message": "Assigning an Object to null is a code smell.  Consider refactoring."
+    },
+    {
+      "rule": "NullAssignment",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderSupervisor.Connection",
       "method": "closeAndRecord",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 243,
-      "end_line": 243,
+      "begin_line": 301,
+      "end_line": 301,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -783,23 +795,11 @@
       "ruleset": "Error Prone",
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
-      "method": "stop",
+      "class": "RecorderSupervisor.Connection",
+      "method": "join",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 393,
-      "end_line": 393,
-      "message": "Assigning an Object to null is a code smell.  Consider refactoring."
-    },
-    {
-      "rule": "NullAssignment",
-      "ruleset": "Error Prone",
-      "priority": 3,
-      "package": "com.stucray.raptor.recorder",
-      "class": "RecorderSupervisor",
-      "method": "stop",
-      "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 394,
-      "end_line": 394,
+      "begin_line": 495,
+      "end_line": 495,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -883,7 +883,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
       "begin_line": 50,
-      "end_line": 400,
+      "end_line": 451,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
@@ -906,8 +906,20 @@
       "class": "RecorderSupervisor",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
-      "begin_line": 40,
-      "end_line": 505,
+      "begin_line": 52,
+      "end_line": 630,
+      "message": "This class has too many methods, consider refactoring it."
+    },
+    {
+      "rule": "TooManyMethods",
+      "ruleset": "Design",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderSupervisor.Connection",
+      "method": "",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
+      "begin_line": 179,
+      "end_line": 497,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
@@ -919,7 +931,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/recorder/Recording.java",
       "begin_line": 20,
-      "end_line": 148,
+      "end_line": 153,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
@@ -931,7 +943,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/scope/MarketScopeService.java",
       "begin_line": 62,
-      "end_line": 461,
+      "end_line": 467,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
@@ -954,8 +966,8 @@
       "class": "TlsStreamSourceFactory",
       "method": "open",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSourceFactory.java",
-      "begin_line": 105,
-      "end_line": 116,
+      "begin_line": 141,
+      "end_line": 152,
       "message": "Consider using a try-with-resources statement instead of explicitly closing the resource"
     },
     {

@@ -4,7 +4,10 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jspecify.annotations.Nullable;
@@ -15,7 +18,8 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 /**
- * Keeps a capture running: one lease, one stream at a time, reconnect forever.
+ * Keeps a capture running: one lease, one stream per connection slot,
+ * reconnect forever.
  *
  * <p>This is what replaces the LaunchAgent. The agent gave three things for
  * free, and each has to be earned back explicitly here: only one recorder ever
@@ -31,10 +35,18 @@ import org.springframework.stereotype.Component;
  * to infer later from timestamp arithmetic — which is the apparatus this whole
  * design exists to replace.
  *
- * <p>The supervisor's own thread does nothing but wait: it starts a recording,
+ * <p>Each connection's own thread does nothing but wait: it starts a recording,
  * blocks until that recording's source ends, records the gap, and starts
  * another. All the work is on the two threads inside the recording, so nothing
  * here can starve the loop draining the socket.
+ *
+ * <p><b>One connection per connection slot (#65).</b> Scope is partitioned
+ * across numbered slots, and each slot is a {@link Connection} of its own: its
+ * own session, resume point, pending gap and failure count, so a reconnect on
+ * one slot neither touches nor mislabels another's. Every slot lives under the
+ * one lease, which is what keeps {@code abandonOpenSessions()} honest. Slot 0
+ * behaves exactly as the single connection always did; an extra slot ends its
+ * stream when its plan empties, and that is recorded as the orderly end it is.
  */
 @Component
 class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
@@ -50,30 +62,13 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	private final RecorderProperties properties;
 	private final Clock clock;
 
+	/** The lifecycle state while there are no connections: before, or after, running. */
 	private volatile RecorderState state = RecorderState.STOPPED;
 	private volatile Instant stateSince;
 	private volatile boolean running;
-	private volatile @Nullable Recording recording;
-	/**
-	 * Attempts in a row that recorded nothing.
-	 *
-	 * <p>An attempt records nothing if the stream could not be opened at all, or
-	 * if the session it opened ended having written no message. Both spellings
-	 * count, because the deterministic failures this exists for are split across
-	 * them: a subscription refusal produces an empty session, while a revoked app
-	 * key, an invalid session token and upstream maintenance never get as far as
-	 * one.
-	 *
-	 * <p>Written only by the supervisor thread and read by health, so an atomic
-	 * rather than a plain int — and reset rather than decremented, because the
-	 * question is "is it failing NOW", not "how often has it failed".
-	 */
-	private final AtomicInteger consecutiveFailed = new AtomicInteger();
-	private volatile @Nullable Thread supervisor;
 	private volatile @Nullable StreamSourceFactory factory;
-
-	/** Why the stream in flight is being torn down, when it is not just ending. */
-	private final AtomicReference<@Nullable PendingGap> pending = new AtomicReference<>();
+	/** One per connection slot, in slot order; empty while not running. */
+	private volatile List<Connection> connections = List.of();
 
 	RecorderSupervisor(ObjectProvider<StreamSourceFactory> factories, RecorderPipeline pipeline,
 			CaptureSessions sessions, CaptureLease lease, CaptureGaps gaps, SuspendClock suspends,
@@ -115,9 +110,16 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 		this.factory = factory;
 		running = true;
 		enter(RecorderState.RECONNECTING);
-		Thread thread = Thread.ofVirtual().name("recorder-supervisor").start(() -> supervise(factory));
-		supervisor = thread;
-		log.info("recorder supervising {}", factory.describe());
+		List<Connection> started = new ArrayList<>();
+		for (int slot = 0; slot < factory.connectionSlots(); slot++) {
+			started.add(new Connection(slot));
+		}
+		connections = List.copyOf(started);
+		for (Connection connection : connections) {
+			connection.start(factory);
+		}
+		log.info("recorder supervising {} on {} connection slot(s)", factory.describe(),
+				connections.size());
 	}
 
 	/**
@@ -150,197 +152,350 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	 * and that thread must not be held for however long a socket takes to close —
 	 * the next check is what notices if this reconnect itself gets stuck.
 	 *
+	 * @param connectionSlot the connection to tear down; the others are left alone
 	 * @param since when the stream was last known to be arriving
 	 */
-	void reconnect(GapCause cause, Instant since) {
-		Recording current = recording;
-		if (current == null || !running) {
-			return;
+	void reconnect(int connectionSlot, GapCause cause, Instant since) {
+		for (Connection connection : connections) {
+			if (connection.slot == connectionSlot) {
+				connection.reconnect(cause, since);
+			}
 		}
-		// ACCUMULATE, never simply replace. A teardown takes longer than the
-		// watchdog interval often enough to matter, so a second request routinely
-		// arrives for the same closing recording — and taking the later `since`
-		// would move the start of the gap forward and under-report the outage.
-		// The cause is no longer decided here at all (see closeAndRecord), but the
-		// instant still is, and the earliest one is the honest answer: the
-		// recorder stopped receiving when it stopped receiving.
-		pending.accumulateAndGet(new PendingGap(cause, since), RecorderSupervisor::earliest);
-		// Stop reading only. The writer drains what is already framed and the
-		// session is closed by the supervisor thread, in that order — losing
-		// messages that survived the disconnect would be a poor way to react to a
-		// disconnect.
-		current.requestStop();
 	}
 
-	private void supervise(StreamSourceFactory factory) {
-		while (running) {
-			Recording current = null;
-			try {
-				StreamSource source = factory.open();
-				// Cleared as the new stream starts, not as the old one ends: a
-				// reconnect requested against a recording that was already closing
-				// would otherwise sit here and mislabel the NEXT gap with a cause
-				// that belonged to the previous stream.
-				pending.set(null);
-				current = pipeline.start(source, CaptureOrigin.RESIDENT);
-				recording = current;
-				enter(RecorderState.RECORDING);
-				current.awaitSource();
-			} catch (IOException e) {
-				if (running) {
-					// Counted, not merely logged. A connect that never became a
-					// session is the shape a revoked key or an invalid token takes,
-					// and #171's counter — which only ever saw sessions — was blind
-					// to every one of them.
-					consecutiveFailed.incrementAndGet();
-					log.warn("could not open a stream from {} ({})", factory.describe(),
-							e.getMessage());
+	/** Every recording in flight, by connection slot. */
+	Map<Integer, Recording> recordings() {
+		Map<Integer, Recording> recordings = new LinkedHashMap<>();
+		for (Connection connection : connections) {
+			Recording current = connection.recording;
+			if (current != null) {
+				recordings.put(connection.slot, current);
+			}
+		}
+		return recordings;
+	}
+
+	/** One connection slot's stream, rebuilt forever while the recorder runs. */
+	private final class Connection {
+
+		private final int slot;
+		private volatile RecorderState state = RecorderState.RECONNECTING;
+		private volatile Instant stateSince = clock.instant();
+		private volatile @Nullable Recording recording;
+		/**
+		 * Attempts in a row that recorded nothing.
+		 *
+		 * <p>An attempt records nothing if the stream could not be opened at all, or
+		 * if the session it opened ended having written no message. Both spellings
+		 * count, because the deterministic failures this exists for are split across
+		 * them: a subscription refusal produces an empty session, while a revoked app
+		 * key, an invalid session token and upstream maintenance never get as far as
+		 * one.
+		 *
+		 * <p>Written only by this connection's thread and read by health, so an
+		 * atomic rather than a plain int — and reset rather than decremented, because
+		 * the question is "is it failing NOW", not "how often has it failed".
+		 */
+		private final AtomicInteger consecutiveFailed = new AtomicInteger();
+		/** Why the stream in flight is being torn down, when it is not just ending. */
+		private final AtomicReference<@Nullable PendingGap> pending = new AtomicReference<>();
+		private volatile @Nullable Thread thread;
+
+		Connection(int slot) {
+			this.slot = slot;
+		}
+
+		void start(StreamSourceFactory factory) {
+			thread = Thread.ofVirtual().name(slot == 0 ? "recorder-supervisor"
+					: "recorder-supervisor-" + slot).start(() -> supervise(factory));
+		}
+
+		void reconnect(GapCause cause, Instant since) {
+			Recording current = recording;
+			if (current == null || !running) {
+				return;
+			}
+			// ACCUMULATE, never simply replace. A teardown takes longer than the
+			// watchdog interval often enough to matter, so a second request routinely
+			// arrives for the same closing recording — and taking the later `since`
+			// would move the start of the gap forward and under-report the outage.
+			// The cause is no longer decided here at all (see closeAndRecord), but the
+			// instant still is, and the earliest one is the honest answer: the
+			// recorder stopped receiving when it stopped receiving.
+			pending.accumulateAndGet(new PendingGap(cause, since), RecorderSupervisor::earliest);
+			// Stop reading only. The writer drains what is already framed and the
+			// session is closed by the supervisor thread, in that order — losing
+			// messages that survived the disconnect would be a poor way to react to a
+			// disconnect.
+			current.requestStop();
+		}
+
+		private void supervise(StreamSourceFactory factory) {
+			while (running) {
+				Recording current = null;
+				try {
+					StreamSource source = factory.open(slot);
+					// Cleared as the new stream starts, not as the old one ends: a
+					// reconnect requested against a recording that was already closing
+					// would otherwise sit here and mislabel the NEXT gap with a cause
+					// that belonged to the previous stream.
+					pending.set(null);
+					current = pipeline.start(source, CaptureOrigin.RESIDENT, slot);
+					recording = current;
+					enter(RecorderState.RECORDING);
+					current.awaitSource();
+				} catch (IOException e) {
+					if (running) {
+						// Counted, not merely logged. A connect that never became a
+						// session is the shape a revoked key or an invalid token takes,
+						// and #171's counter — which only ever saw sessions — was blind
+						// to every one of them.
+						consecutiveFailed.incrementAndGet();
+						log.warn("could not open a stream from {} on connection slot {} ({})",
+								factory.describe(), slot, e.getMessage());
+					}
+					// Silent when the recorder is stopping: a factory interrupted while
+					// waiting for a fixture to enter scope has not failed at anything, and
+					// a warning on every tidy shutdown is how a log stops being read.
+				} catch (InterruptedException e) {
+					// The interrupt is NOT restored, which is deliberate and is the one
+					// place in this file worth arguing about. What runs next, in the
+					// finally below, is the session's last commit and its ended_at stamp
+					// — and HikariCP answers a connection request on an interrupted
+					// thread by refusing it, so restoring the flag here would spill the
+					// final batch of a match every time the application was shut down
+					// tidily. `running` is what stops the loop; the flag has done its
+					// job by getting us here.
+					running = false;
+				} finally {
+					closeAndRecord(current);
 				}
-				// Silent when the recorder is stopping: a factory interrupted while
-				// waiting for a fixture to enter scope has not failed at anything, and
-				// a warning on every tidy shutdown is how a log stops being read.
-			} catch (InterruptedException e) {
-				// The interrupt is NOT restored, which is deliberate and is the one
-				// place in this file worth arguing about. What runs next, in the
-				// finally below, is the session's last commit and its ended_at stamp
-				// — and HikariCP answers a connection request on an interrupted
-				// thread by refusing it, so restoring the flag here would spill the
-				// final batch of a match every time the application was shut down
-				// tidily. `running` is what stops the loop; the flag has done its
-				// job by getting us here.
-				running = false;
-			} finally {
-				closeAndRecord(current);
+				if (running) {
+					enter(RecorderState.RECONNECTING);
+					pause(reconnectDelay());
+				}
 			}
-			if (running) {
-				enter(RecorderState.RECONNECTING);
-				pause(reconnectDelay());
-			}
+			enter(RecorderState.STOPPED);
 		}
-		enter(RecorderState.STOPPED);
-	}
 
-	/**
-	 * End the recording and write down the gap it leaves behind.
-	 *
-	 * <p>The gap ends here, when the stream was torn down — not when the next one
-	 * connects. The interval between the two is a different fact with a different
-	 * answer: it is the space between this session's {@code ended_at} and the next
-	 * session's {@code started_at}, which is legible without anyone writing a row
-	 * for it, and which stays legible when the recorder is stopped rather than
-	 * reconnected.
-	 */
-	private void closeAndRecord(@Nullable Recording current) {
-		if (current == null) {
-			return;
+		/**
+		 * End the recording and write down the gap it leaves behind.
+		 *
+		 * <p>The gap ends here, when the stream was torn down — not when the next one
+		 * connects. The interval between the two is a different fact with a different
+		 * answer: it is the space between this session's {@code ended_at} and the next
+		 * session's {@code started_at}, which is legible without anyone writing a row
+		 * for it, and which stays legible when the recorder is stopped rather than
+		 * reconnected.
+		 */
+		private void closeAndRecord(@Nullable Recording current) {
+			if (current == null) {
+				return;
+			}
+			Instant lastFrame = current.lastFrameAt();
+			try {
+				current.close();
+			} catch (IOException e) {
+				log.warn("capture session {} did not close cleanly", current.sessionId(), e);
+			}
+			recording = null;
+			PendingGap gap = pending.getAndSet(null);
+			if (current.finished() && gap == null) {
+				// An extra connection with nothing left to carry, closed to return its
+				// slot to the key's allowance (#65). Nothing was lost and nothing failed:
+				// the session's ended_at says when it stopped, exactly as for a tidy
+				// shutdown, and a gap row or a failed attempt here would be noise.
+				log.info("connection slot {} has nothing left to carry; its stream is closed", slot);
+				return;
+			}
+			countAttempt(current);
+			if (!running && gap == null) {
+				// An orderly shutdown is not a gap: the session's ended_at says exactly
+				// when recording stopped, and inventing a gap row for it would put noise
+				// in the one ledger whose value is that every row means something.
+				return;
+			}
+			Instant now = clock.instant();
+			String detail = "framed=" + current.framed() + " written=" + current.written();
+			// What was asked for, which is not necessarily what happened.
+			GapCause requested = gap == null ? GapCause.DISCONNECT : gap.cause();
+			Instant from = gap == null ? lastFrame : gap.since();
+
+			// ALREADY DECIDED BY THE CLOCK. The watchdog names a suspend from the same
+			// measurement this would consult, so asking twice could only disagree with
+			// itself.
+			if (requested == GapCause.SLEEP) {
+				gaps.record(current.sessionId(), from, now, GapCause.SLEEP, detail);
+				return;
+			}
+
+			// THE CLOCK OVERRULES BOTH OTHER CAUSES, and #293 is why it has to overrule
+			// SILENCE and not just DISCONNECT.
+			//
+			// #264 was "whichever detector notices first names the gap". #290 answered
+			// the socket-first half — the read loop's timeout expires while the machine
+			// is away and fires on resume — and left a second door open, through which
+			// the very next clamshell close walked: the watchdog identified the suspend
+			// correctly at 01:26:51 on 2026-09-17, and the tick TEN SECONDS LATER
+			// overwrote it with SILENCE while the teardown was still in flight, because
+			// the stream had of course delivered nothing while the machine was off.
+			//
+			// That is deterministic rather than unlucky. Any suspend longer than the
+			// silence timeout leaves the stream silent for its whole duration, so the
+			// following tick always relabels it; the 2026-09-12 close survived only
+			// because its teardown finished inside one watchdog interval.
+			//
+			// So silence AFTER a suspend is an artefact of the suspend, and the
+			// measurement that can tell says so. Asked here rather than corrected
+			// afterwards because `raw` is append-only: there is no second chance at
+			// this row.
+			SuspendClock.Suspend suspend = suspends.straddling(from, now);
+			if (suspend == null) {
+				gaps.record(current.sessionId(), from, now, requested, detail);
+				return;
+			}
+			// The measurement goes in the detail, because a reader of this row is
+			// entitled to know the cause was inferred from a clock jump rather than
+			// observed by the detector that named it — and, now, to see that it
+			// overruled one that had.
+			gaps.record(current.sessionId(), from, now, GapCause.SLEEP,
+					detail + " suspended=" + suspend.duration().toSeconds() + "s"
+							+ (gap == null ? "" : " (" + requested + " overruled)"));
 		}
-		Instant lastFrame = current.lastFrameAt();
-		try {
-			current.close();
-		} catch (IOException e) {
-			log.warn("capture session {} did not close cleanly", current.sessionId(), e);
-		}
-		recording = null;
-		if (running) {
-			// Not while shutting down: a session ended by Ctrl-C having written
-			// nothing is an orderly stop, and counting it would let three tidy
-			// restarts in a row look like a crashloop.
+
+		/** Whether a session that ended counts as a failed attempt (#171). */
+		private void countAttempt(Recording current) {
+			if (!running) {
+				// Not while shutting down: a session ended by Ctrl-C having written
+				// nothing is an orderly stop, and counting it would let three tidy
+				// restarts in a row look like a crashloop.
+				return;
+			}
 			if (current.written() > 0) {
 				consecutiveFailed.set(0);
-			} else {
-				int empty = consecutiveFailed.incrementAndGet();
-				log.warn("capture session {} ended having written nothing ({} in a row)",
-						current.sessionId(), empty);
+				return;
+			}
+			int empty = consecutiveFailed.incrementAndGet();
+			log.warn("capture session {} ended having written nothing ({} in a row)",
+					current.sessionId(), empty);
+		}
+
+		/**
+		 * How long to wait before trying again, and why it is not always the same.
+		 *
+		 * <p>The flat delay is right for the case it was written for: a stream
+		 * dropped mid-match, where every second of waiting is book lost. It is wrong
+		 * for a <b>deterministic</b> refusal, which cannot succeed on a retry because
+		 * the input that caused it has not changed —
+		 * {@code SUBSCRIPTION_LIMIT_EXCEEDED} was refused identically sixteen times
+		 * in four minutes on 2026-09-05 (#171), each attempt costing a TLS handshake
+		 * and an authentication against Betfair's stream API, a session row and a gap
+		 * row.
+		 *
+		 * <p>The two are told apart by <b>whether the last attempt recorded
+		 * anything</b>, not by classifying error codes. A code list needs
+		 * maintaining, fails open on anything unlisted, and would have to name every
+		 * refusal in advance; "the last attempt recorded nothing" already captures
+		 * the property that matters and names none. The mid-match case is untouched
+		 * by construction: a stream that delivered a single message resets the count
+		 * and the next reconnect is the full-speed one.
+		 *
+		 * <p>No jitter. There is one recorder by construction — the lease says so —
+		 * so there is no herd to disperse.
+		 */
+		private Duration reconnectDelay() {
+			int failed = consecutiveFailed.get();
+			Duration delay = backoff(properties.reconnectDelay(), properties.reconnectDelayMax(), failed);
+			if (delay.compareTo(properties.reconnectDelay()) > 0) {
+				log.info("{} attempt(s) in a row recorded nothing; waiting {} before the next rather "
+						+ "than {} — an unchanged request refused identically cannot succeed on a "
+						+ "retry", failed, delay, properties.reconnectDelay());
+			}
+			return delay;
+		}
+
+		/**
+		 * What to call what this connection is doing now.
+		 *
+		 * <p>Derived rather than stored for the one case its thread cannot report on
+		 * itself: while it waits inside {@code factory.open(slot)} for this slot to be
+		 * given a fixture, it is blocked, and the field it set on the way in still
+		 * says RECONNECTING. The factory is the only thing that knows the difference,
+		 * so it is asked (#144).
+		 */
+		RecorderState state() {
+			return awaitingSince() == null ? state : RecorderState.IDLE;
+		}
+
+		Instant stateSince() {
+			Instant awaiting = awaitingSince();
+			return awaiting == null ? stateSince : awaiting;
+		}
+
+		/** When the factory started waiting for this slot's scope, if it is waiting at all. */
+		private @Nullable Instant awaitingSince() {
+			if (state != RecorderState.RECONNECTING) {
+				// Only ever true between streams: a factory that has just handed back a
+				// source still reports the wait that preceded it for as long as it takes
+				// the pipeline to start, and a RECORDING connection is not idle.
+				return null;
+			}
+			StreamSourceFactory current = factory;
+			return current == null ? null : current.awaitingSince(slot);
+		}
+
+		private void enter(RecorderState next) {
+			state = next;
+			stateSince = clock.instant();
+		}
+
+		/**
+		 * Zero from a session's first write, not from its end (#13).
+		 *
+		 * <p>The stored count is only settled when a session closes, which for a
+		 * healthy one can be hours away: read it bare and a recorder that had four
+		 * dead attempts before a good session reports failing for that whole session.
+		 * Whether the session in flight has written anything is the live answer to
+		 * "is it failing now", so it overrides the stored count while it lasts.
+		 */
+		int consecutiveFailedAttempts() {
+			Recording current = recording;
+			if (current != null && current.written() > 0) {
+				return 0;
+			}
+			return consecutiveFailed.get();
+		}
+
+		void requestStop() {
+			Recording current = recording;
+			if (current != null) {
+				current.requestStop();
 			}
 		}
-		PendingGap gap = pending.getAndSet(null);
-		if (!running && gap == null) {
-			// An orderly shutdown is not a gap: the session's ended_at says exactly
-			// when recording stopped, and inventing a gap row for it would put noise
-			// in the one ledger whose value is that every row means something.
-			return;
-		}
-		Instant now = clock.instant();
-		String detail = "framed=" + current.framed() + " written=" + current.written();
-		// What was asked for, which is not necessarily what happened.
-		GapCause requested = gap == null ? GapCause.DISCONNECT : gap.cause();
-		Instant from = gap == null ? lastFrame : gap.since();
 
-		// ALREADY DECIDED BY THE CLOCK. The watchdog names a suspend from the same
-		// measurement this would consult, so asking twice could only disagree with
-		// itself.
-		if (requested == GapCause.SLEEP) {
-			gaps.record(current.sessionId(), from, now, GapCause.SLEEP, detail);
-			return;
+		/**
+		 * Interrupted, not just asked. The thread spends most of its life waiting —
+		 * for a source to end, for the reconnect delay, or for a fixture to enter
+		 * scope on a quiet Tuesday — and a shutdown that only sets a flag waits out
+		 * whichever of those is in flight. Every wait on this thread treats an
+		 * interrupt as "stop", and the work that must not be cut short is on the two
+		 * threads inside the recording, which has already been asked to stop.
+		 */
+		void join() {
+			Thread current = thread;
+			if (current == null) {
+				return;
+			}
+			current.interrupt();
+			try {
+				current.join(Duration.ofSeconds(30));
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			thread = null;
 		}
-
-		// THE CLOCK OVERRULES BOTH OTHER CAUSES, and #293 is why it has to overrule
-		// SILENCE and not just DISCONNECT.
-		//
-		// #264 was "whichever detector notices first names the gap". #290 answered
-		// the socket-first half — the read loop's timeout expires while the machine
-		// is away and fires on resume — and left a second door open, through which
-		// the very next clamshell close walked: the watchdog identified the suspend
-		// correctly at 01:26:51 on 2026-09-17, and the tick TEN SECONDS LATER
-		// overwrote it with SILENCE while the teardown was still in flight, because
-		// the stream had of course delivered nothing while the machine was off.
-		//
-		// That is deterministic rather than unlucky. Any suspend longer than the
-		// silence timeout leaves the stream silent for its whole duration, so the
-		// following tick always relabels it; the 2026-09-12 close survived only
-		// because its teardown finished inside one watchdog interval.
-		//
-		// So silence AFTER a suspend is an artefact of the suspend, and the
-		// measurement that can tell says so. Asked here rather than corrected
-		// afterwards because `raw` is append-only: there is no second chance at
-		// this row.
-		SuspendClock.Suspend suspend = suspends.straddling(from, now);
-		if (suspend == null) {
-			gaps.record(current.sessionId(), from, now, requested, detail);
-			return;
-		}
-		// The measurement goes in the detail, because a reader of this row is
-		// entitled to know the cause was inferred from a clock jump rather than
-		// observed by the detector that named it — and, now, to see that it
-		// overruled one that had.
-		gaps.record(current.sessionId(), from, now, GapCause.SLEEP,
-				detail + " suspended=" + suspend.duration().toSeconds() + "s"
-						+ (gap == null ? "" : " (" + requested + " overruled)"));
 	}
 
-	/**
-	 * How long to wait before trying again, and why it is not always the same.
-	 *
-	 * <p>The flat delay is right for the case it was written for: a stream
-	 * dropped mid-match, where every second of waiting is book lost. It is wrong
-	 * for a <b>deterministic</b> refusal, which cannot succeed on a retry because
-	 * the input that caused it has not changed —
-	 * {@code SUBSCRIPTION_LIMIT_EXCEEDED} was refused identically sixteen times
-	 * in four minutes on 2026-09-05 (#171), each attempt costing a TLS handshake
-	 * and an authentication against Betfair's stream API, a session row and a gap
-	 * row.
-	 *
-	 * <p>The two are told apart by <b>whether the last attempt recorded
-	 * anything</b>, not by classifying error codes. A code list needs
-	 * maintaining, fails open on anything unlisted, and would have to name every
-	 * refusal in advance; "the last attempt recorded nothing" already captures
-	 * the property that matters and names none. The mid-match case is untouched
-	 * by construction: a stream that delivered a single message resets the count
-	 * and the next reconnect is the full-speed one.
-	 *
-	 * <p>No jitter. There is one recorder by construction — the lease says so —
-	 * so there is no herd to disperse.
-	 */
-	private Duration reconnectDelay() {
-		int failed = consecutiveFailed.get();
-		Duration delay = backoff(properties.reconnectDelay(), properties.reconnectDelayMax(), failed);
-		if (delay.compareTo(properties.reconnectDelay()) > 0) {
-			log.info("{} attempt(s) in a row recorded nothing; waiting {} before the next rather "
-					+ "than {} — an unchanged request refused identically cannot succeed on a "
-					+ "retry", failed, delay, properties.reconnectDelay());
-		}
-		return delay;
-	}
 
 	/**
 	 * {@code min(base * 2^(failed - 1), max)}, and {@code base} below two.
@@ -370,27 +525,14 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	@Override
 	public void stop() {
 		running = false;
-		Recording current = recording;
-		if (current != null) {
-			current.requestStop();
+		List<Connection> stopping = connections;
+		for (Connection connection : stopping) {
+			connection.requestStop();
 		}
-		Thread thread = supervisor;
-		if (thread != null) {
-			// Interrupted, not just asked. The supervisor thread spends most of its
-			// life waiting — for a source to end, for the reconnect delay, or for a
-			// fixture to enter scope on a quiet Tuesday — and a shutdown that only
-			// sets a flag waits out whichever of those is in flight. Every wait on
-			// this thread treats an interrupt as "stop", and the work that must not
-			// be cut short is on the two threads inside the recording, which has
-			// already been asked to stop above.
-			thread.interrupt();
-			try {
-				thread.join(Duration.ofSeconds(30));
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-			}
+		for (Connection connection : stopping) {
+			connection.join();
 		}
-		supervisor = null;
+		connections = List.of();
 		factory = null;
 		lease.close();
 		enter(RecorderState.STOPPED);
@@ -415,17 +557,18 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	}
 
 	/**
-	 * What to call what the recorder is doing now.
+	 * What to call what the recorder is doing now: connection slot 0's state while
+	 * running, the lifecycle state otherwise.
 	 *
-	 * <p>Derived rather than stored for the one case the supervisor thread cannot
-	 * report on itself: while it waits inside {@code factory.open()} for a
-	 * fixture to enter the horizon, it is blocked, and the field it set on the
-	 * way in still says RECONNECTING. The factory is the only thing that knows
-	 * the difference, so it is asked (#144).
+	 * <p>Slot 0 is the single connection the recorder has always had, so with one
+	 * connection this is exactly what it reported before slots. Reporting every
+	 * slot, and the worst of them at the top, is #66; until then more than one
+	 * connection is not switched on (#67).
 	 */
 	@Override
 	public RecorderState state() {
-		return awaitingSince() == null ? state : RecorderState.IDLE;
+		Connection first = first();
+		return first == null ? state : first.state();
 	}
 
 	/**
@@ -437,20 +580,8 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	 */
 	@Override
 	public Instant stateSince() {
-		Instant awaiting = awaitingSince();
-		return awaiting == null ? stateSince : awaiting;
-	}
-
-	/** When the factory started waiting for scope, if it is waiting at all. */
-	private @Nullable Instant awaitingSince() {
-		if (state != RecorderState.RECONNECTING) {
-			// Only ever true between streams: a factory that has just handed back a
-			// source still reports the wait that preceded it for as long as it takes
-			// the pipeline to start, and a RECORDING recorder is not idle.
-			return null;
-		}
-		StreamSourceFactory current = factory;
-		return current == null ? null : current.awaitingSince();
+		Connection first = first();
+		return first == null ? stateSince : first.stateSince();
 	}
 
 	private void enter(RecorderState next) {
@@ -458,28 +589,22 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 		stateSince = clock.instant();
 	}
 
-	/**
-	 * Zero from a session's first write, not from its end (#13).
-	 *
-	 * <p>The stored count is only settled when a session closes, which for a
-	 * healthy one can be hours away: read it bare and a recorder that had four
-	 * dead attempts before a good session reports failing for that whole session.
-	 * Whether the session in flight has written anything is the live answer to
-	 * "is it failing now", so it overrides the stored count while it lasts.
-	 */
+	/** Slot 0's count, for the same reason {@link #state()} is slot 0's (#66). */
 	@Override
 	public int consecutiveFailedAttempts() {
-		Recording current = recording;
-		if (current != null && current.written() > 0) {
-			return 0;
-		}
-		return consecutiveFailed.get();
+		Connection first = first();
+		return first == null ? 0 : first.consecutiveFailedAttempts();
 	}
 
-	/** The session in flight, or {@code null} when nothing is being recorded. */
-
+	/** Slot 0's session in flight, or {@code null} when it is recording nothing. */
 	@Nullable Recording current() {
-		return recording;
+		Connection first = first();
+		return first == null ? null : first.recording;
+	}
+
+	private @Nullable Connection first() {
+		List<Connection> current = connections;
+		return current.isEmpty() ? null : current.getFirst();
 	}
 
 	/**

@@ -1,6 +1,7 @@
 package com.stucray.raptor.recorder;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -14,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -63,7 +65,7 @@ class StreamWatchdogTest {
 
 		// The gap starts when the machine went away, not when the check noticed:
 		// ten minutes of wall clock passed and ten seconds of it was real.
-		verify(supervisor).reconnect(GapCause.SLEEP,
+		verify(supervisor).reconnect(0, GapCause.SLEEP,
 				START.plusSeconds(600).minusSeconds(590));
 	}
 
@@ -76,7 +78,7 @@ class StreamWatchdogTest {
 		advance(Duration.ofMillis(10_150), Duration.ofSeconds(10));
 		watchdog.check();
 
-		verify(supervisor, never()).reconnect(any(), any());
+		verify(supervisor, never()).reconnect(anyInt(), any(), any());
 	}
 
 	/**
@@ -93,7 +95,7 @@ class StreamWatchdogTest {
 
 		watchdog.check();
 
-		verify(supervisor).reconnect(GapCause.SILENCE, lastFrame);
+		verify(supervisor).reconnect(0, GapCause.SILENCE, lastFrame);
 	}
 
 	@Test
@@ -102,7 +104,7 @@ class StreamWatchdogTest {
 
 		watchdog.check();
 
-		verify(supervisor, never()).reconnect(any(), any());
+		verify(supervisor, never()).reconnect(anyInt(), any(), any());
 	}
 
 	/**
@@ -124,7 +126,7 @@ class StreamWatchdogTest {
 	/** Nothing recording, nothing to stamp — and no row invented for it. */
 	@Test
 	void stampsNothingWhenNothingIsBeingRecorded() {
-		when(supervisor.current()).thenReturn(null);
+		when(supervisor.recordings()).thenReturn(Map.of());
 
 		watchdog.check();
 
@@ -149,7 +151,7 @@ class StreamWatchdogTest {
 		advance(Duration.ofMinutes(10), Duration.ofSeconds(10));
 		watchdog.check();
 
-		verify(supervisor).reconnect(eq(GapCause.SLEEP), any());
+		verify(supervisor).reconnect(eq(0), eq(GapCause.SLEEP), any());
 	}
 
 	/**
@@ -168,8 +170,8 @@ class StreamWatchdogTest {
 		when(recording.lastFrameAt()).thenReturn(START);
 		watchdog.check();
 
-		verify(supervisor).reconnect(eq(GapCause.SLEEP), any());
-		verify(supervisor, never()).reconnect(eq(GapCause.SILENCE), any());
+		verify(supervisor).reconnect(eq(0), eq(GapCause.SLEEP), any());
+		verify(supervisor, never()).reconnect(anyInt(), eq(GapCause.SILENCE), any());
 	}
 
 	/**
@@ -179,17 +181,58 @@ class StreamWatchdogTest {
 	 */
 	@Test
 	void staysQuietWhenNothingIsBeingRecorded() {
-		when(supervisor.current()).thenReturn(null);
+		when(supervisor.recordings()).thenReturn(Map.of());
 
 		watchdog.check();
 		advance(Duration.ofMinutes(10), Duration.ofSeconds(10));
 		watchdog.check();
 
-		verify(supervisor, never()).reconnect(any(), any());
+		verify(supervisor, never()).reconnect(anyInt(), any(), any());
+	}
+
+	/**
+	 * Each connection is judged on its own evidence (#65).
+	 *
+	 * <p>One connection gone silent is torn down alone: the other is delivering,
+	 * so it is stamped alive and left exactly as it is. Tearing both down would
+	 * turn one dead socket into two gaps.
+	 */
+	@Test
+	void tearsDownOnlyTheConnectionThatWentSilent() {
+		Recording quiet = mock(Recording.class);
+		when(recording.sessionId()).thenReturn(41L);
+		when(recording.lastFrameAt()).thenReturn(START.minusSeconds(3));
+		when(quiet.sessionId()).thenReturn(42L);
+		Instant lastFrame = START.minusSeconds(45);
+		when(quiet.lastFrameAt()).thenReturn(lastFrame);
+		when(supervisor.recordings()).thenReturn(Map.of(0, recording, 1, quiet));
+
+		watchdog.check();
+
+		verify(supervisor).reconnect(1, GapCause.SILENCE, lastFrame);
+		verify(supervisor, never()).reconnect(eq(0), any(), any());
+		verify(sessions).seen(41L);
+		verify(sessions, never()).seen(42L);
+	}
+
+	/** A suspend stops every connection at once, so every one is torn down. */
+	@Test
+	void aSuspendTearsDownEveryConnection() {
+		Recording other = mock(Recording.class);
+		when(recording.lastFrameAt()).thenReturn(START);
+		when(other.lastFrameAt()).thenReturn(START);
+		when(supervisor.recordings()).thenReturn(Map.of(0, recording, 1, other));
+		watchdog.check();
+
+		advance(Duration.ofMinutes(10), Duration.ofSeconds(10));
+		watchdog.check();
+
+		verify(supervisor).reconnect(eq(0), eq(GapCause.SLEEP), any());
+		verify(supervisor).reconnect(eq(1), eq(GapCause.SLEEP), any());
 	}
 
 	private void recordingSince(Instant lastFrame) {
-		when(supervisor.current()).thenReturn(recording);
+		when(supervisor.recordings()).thenReturn(Map.of(0, recording));
 		when(recording.lastFrameAt()).thenReturn(lastFrame);
 	}
 

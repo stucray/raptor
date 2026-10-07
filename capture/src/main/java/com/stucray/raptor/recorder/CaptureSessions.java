@@ -4,6 +4,7 @@ import com.stucray.raptor.datasource.Acquisition;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -28,12 +29,23 @@ class CaptureSessions {
 		this.clock = clock;
 	}
 
+	/** A session on no connection slot: a replay or a load, not a live connection. */
 	long begin(CaptureOrigin origin, String configJson, String buildVersion) {
+		return begin(origin, configJson, buildVersion, null);
+	}
+
+	/**
+	 * @param connectionSlot the connection slot the session's stream occupies
+	 *     (#65), or null when it is not a live connection
+	 */
+	long begin(CaptureOrigin origin, String configJson, String buildVersion,
+			@Nullable Integer connectionSlot) {
 		Long id = jdbc.sql("""
-						insert into raw.capture_session (started_at, origin, config_json, build_version)
-						values (?, ?, cast(? as jsonb), ?)
+						insert into raw.capture_session (
+								started_at, origin, config_json, build_version, connection_slot)
+						values (?, ?, cast(? as jsonb), ?, ?)
 						returning id""")
-				.params(now(), origin.name(), configJson, buildVersion)
+				.params(Arrays.asList(now(), origin.name(), configJson, buildVersion, connectionSlot))
 				.query(Long.class)
 				.single();
 		return id;

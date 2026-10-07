@@ -32,4 +32,13 @@ public interface CaptureScope {
 	 * @param marketIds that connection's whole subscription
 	 */
 	void subscribed(int connectionSlot, List<String> marketIds);
+
+	/**
+	 * How many connections the plan may use, each in its own connection slot
+	 * (0, 1, ...). The recorder holds one connection per slot (#65). One unless
+	 * the implementation says otherwise.
+	 */
+	default int connectionSlots() {
+		return 1;
+	}
 }

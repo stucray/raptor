@@ -46,6 +46,20 @@ public interface StreamSource extends AutoCloseable {
 	}
 
 	/**
+	 * Whether the source ended because it had nothing left to carry, rather than
+	 * because the stream was lost.
+	 *
+	 * <p>Only an extra connection does this: when the plan gives its connection
+	 * slot nothing, it closes and returns its slot to the app key's allowance
+	 * (#65). That is an orderly end by design, and the supervisor records it as
+	 * one — no gap, no failed attempt. Asked after {@link #next()} has returned
+	 * {@code null}.
+	 */
+	default boolean finished() {
+		return false;
+	}
+
+	/**
 	 * The next frame, or {@code null} when the source is exhausted.
 	 *
 	 * @throws IOException if the underlying stream fails; the read loop treats
