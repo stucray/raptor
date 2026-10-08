@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
@@ -297,6 +298,44 @@ class ProjectCaptureLedgerIntegrationTest {
 				.isEqualTo("DONE");
 		assertThat(text("select exit_reason from ledger.market_scope where market_id = ?", "1.5"))
 				.isEqualTo("CLOSED");
+	}
+
+	/**
+	 * The ledger carries each row's connection slot, and follows it when raw's
+	 * changes (#66).
+	 *
+	 * <p>Both rows here are closed and outside every refresh window, so only the
+	 * comparison with raw can notice: a slot that changed would otherwise stay
+	 * as it was first derived, and every per-connection question would be asked
+	 * of the wrong connection.
+	 */
+	@Test
+	void theLedgerCarriesEachRowsConnectionSlotAndFollowsAChange() throws Exception {
+		scoped("1.6", true, "DONE", "CLOSED");
+		jdbc.sql("update raw.market_scope set connection_slot = 1 where market_id = '1.6'")
+				.update();
+		jdbc.sql("update raw.capture_session set connection_slot = 0 where id = ?")
+				.param(recorded).update();
+		run();
+		assertThat(slot("select connection_slot from ledger.market_scope where market_id = ?",
+				"1.6")).isEqualTo(1);
+		assertThat(slot("select connection_slot from ledger.capture_session where session_id = ?",
+				recorded)).isZero();
+
+		jdbc.sql("update raw.market_scope set connection_slot = 2 where market_id = '1.6'")
+				.update();
+		jdbc.sql("update raw.capture_session set connection_slot = 3 where id = ?")
+				.param(recorded).update();
+		run();
+
+		assertThat(slot("select connection_slot from ledger.market_scope where market_id = ?",
+				"1.6")).isEqualTo(2);
+		assertThat(slot("select connection_slot from ledger.capture_session where session_id = ?",
+				recorded)).isEqualTo(3);
+	}
+
+	private @Nullable Integer slot(String sql, Object key) {
+		return jdbc.sql(sql).param(key).query(Integer.class).single();
 	}
 
 	/**

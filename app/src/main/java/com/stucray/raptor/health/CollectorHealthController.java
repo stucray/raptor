@@ -2,6 +2,7 @@ package com.stucray.raptor.health;
 
 import com.stucray.raptor.capture.CaptureConfig;
 import com.stucray.raptor.capture.CaptureConfigProvider;
+import com.stucray.raptor.projection.ConnectionSlot;
 import com.stucray.raptor.projection.PlayWindow;
 import com.stucray.raptor.sources.SourceAdapter;
 import com.stucray.raptor.sources.SourceAdapter.Freshness;
@@ -276,14 +277,18 @@ class CollectorHealthController {
      * apart.
      */
     private int gapsDuringPlay() {
+        // Only the markets the gapped session's connection carried (#66).
         Integer gaps = jdbc.sql("""
                 select count(*) from ledger.capture_gap g
+                left join ledger.capture_session q on q.session_id = g.session_id
                 where exists (
                     select 1 from ledger.market_scope s
                     where %1$s
                       and g.started_at < case when s.state = 'DONE'
                               then s.state_changed_at else now() end
-                      and g.ended_at > %2$s)""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS))
+                      and g.ended_at > %2$s
+                      and %3$s)""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS,
+                ConnectionSlot.carries("q.connection_slot")))
             .query(Integer.class).single();
         return gaps == null ? 0 : gaps;
     }
@@ -304,10 +309,17 @@ class CollectorHealthController {
      * would be guessing at exactly the moment the evidence stops.
      */
     private int restartsDuringPlay() {
+        // Per connection (#66): the next session on the SAME slot ends the
+        // interval, and only that slot's markets were left uncaptured by it.
+        // Across every connection, slot 1 starting while slot 0 was still
+        // recording would end slot 0's interval early — or start one that never
+        // happened.
         Integer restarts = jdbc.sql("""
                 with down as (
-                    select ended_at as from_at,
-                           lead(started_at) over (order by started_at) as to_at
+                    select ended_at as from_at, connection_slot,
+                           lead(started_at) over (
+                               partition by coalesce(connection_slot, 0)
+                               order by started_at) as to_at
                     from ledger.capture_session)
                 select count(*) from down d
                 where d.from_at is not null and d.to_at is not null
@@ -317,7 +329,9 @@ class CollectorHealthController {
                     where %1$s
                       and d.from_at < case when s.state = 'DONE'
                               then s.state_changed_at else now() end
-                      and d.to_at > %2$s)""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS))
+                      and d.to_at > %2$s
+                      and %3$s)""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS,
+                ConnectionSlot.carries("d.connection_slot")))
             .query(Integer.class).single();
         return restarts == null ? 0 : restarts;
     }
@@ -379,13 +393,17 @@ class CollectorHealthController {
                        exit_status, exit_detail, build_version, markets, messages,
                        conflated, gap_count, gap_total_ms, max_gap_ms, gaps_sleep, gaps_silence,
                        gaps_disconnect,
-                       -- A session with no ending that a LATER session succeeded
-                       -- was killed: the recorder is single-writer, so an older
-                       -- open session cannot still be running. This is the only
-                       -- trace a SIGKILL leaves (paddock#118).
+                       -- A session with no ending that a LATER session ON THE SAME
+                       -- CONNECTION SLOT succeeded was killed: each slot holds one
+                       -- connection at a time, so an older open session on that
+                       -- slot cannot still be running. This is the only trace a
+                       -- SIGKILL leaves (paddock#118). Across slots it proves
+                       -- nothing: slot 1 starting says nothing about slot 0 (#66).
                        ended_at is null and exists (
                            select 1 from ledger.capture_session later
-                           where later.started_at > s.started_at) as abandoned
+                           where later.started_at > s.started_at
+                             and coalesce(later.connection_slot, 0)
+                                 = coalesce(s.connection_slot, 0)) as abandoned
                 from ledger.capture_session s
                 order by started_at desc
                 limit :limit""")

@@ -482,7 +482,7 @@ class RecorderSupervisorTest {
 		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
 			RecorderSupervisor current = supervisor;
 			assertThat(current).isNotNull();
-			Recording recording = current.current();
+			Recording recording = current.recordings().get(0);
 			assertThat(recording).isNotNull();
 			assertThat(recording.written()).isPositive();
 			assertThat(current.consecutiveFailedAttempts()).isZero();
@@ -674,7 +674,10 @@ class RecorderSupervisorTest {
 			throw new IOException("Betfair stream failure: no connections available");
 		}), true);
 		supervisor.start();
-		awaitRecording();
+		// Slot 0's recording, not the recorder's state: the state is RECONNECTING
+		// throughout, which is the point of the last assertion below.
+		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+				assertThat(requireNonNull(supervisor).recordings()).containsKey(0));
 		Recording slotZero = requireNonNull(supervisor).recordings().get(0);
 
 		Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -682,8 +685,66 @@ class RecorderSupervisorTest {
 
 		assertThat(requireNonNull(supervisor).recordings()).containsOnlyKeys(0);
 		assertThat(requireNonNull(supervisor).recordings().get(0)).isSameAs(slotZero);
-		assertThat(requireNonNull(supervisor).state()).isEqualTo(RecorderState.RECORDING);
 		verify(gaps, never()).record(anyLong(), any(), any(), any(), any());
+		// And the recorder says so (#66): one connection that cannot connect is
+		// the state to report, whatever the others are doing, and its failures are
+		// the recorder's failures.
+		assertThat(requireNonNull(supervisor).state()).isEqualTo(RecorderState.RECONNECTING);
+		assertThat(requireNonNull(supervisor).consecutiveFailedAttempts())
+				.isGreaterThanOrEqualTo(3);
+	}
+
+	/**
+	 * A slot with nothing to carry does not make the recorder look idle (#66).
+	 *
+	 * <p>An extra slot waits for a fixture most of the time. If its IDLE outranked
+	 * slot 0's RECORDING, the heartbeat would read a recorder capturing a match as
+	 * one with nothing to do, and keep-awake would let the machine sleep under it.
+	 */
+	@Test
+	@Timeout(30)
+	void aSlotWaitingForAFixtureLeavesTheRecorderRecording() {
+		when(lease.acquire()).thenReturn(true);
+		AtomicReference<@Nullable Instant> awaiting = new AtomicReference<>(CLOCK.instant());
+		CountDownLatch never = new CountDownLatch(1);
+		supervisor = supervisor(new StreamSourceFactory() {
+			@Override
+			public String describe() {
+				return "slot 1 waits";
+			}
+
+			@Override
+			public int connectionSlots() {
+				return 2;
+			}
+
+			@Override
+			public @Nullable Instant awaitingSince(int connectionSlot) {
+				return connectionSlot == 1 ? awaiting.get() : null;
+			}
+
+			@Override
+			public StreamSource open(int connectionSlot) throws IOException {
+				if (connectionSlot == 0) {
+					return endless();
+				}
+				try {
+					never.await();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new IOException("interrupted while waiting for a fixture", e);
+				}
+				return endless();
+			}
+		}, true);
+
+		supervisor.start();
+
+		Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+				assertThat(requireNonNull(supervisor).connectionStatuses())
+						.extracting(RecorderSupervisor.ConnectionStatus::state)
+						.containsExactly(RecorderState.RECORDING, RecorderState.IDLE));
+		assertThat(requireNonNull(supervisor).state()).isEqualTo(RecorderState.RECORDING);
 	}
 
 	private void awaitRecording() {

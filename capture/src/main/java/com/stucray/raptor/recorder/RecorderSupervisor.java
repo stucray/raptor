@@ -557,22 +557,25 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	}
 
 	/**
-	 * What to call what the recorder is doing now: connection slot 0's state while
-	 * running, the lifecycle state otherwise.
+	 * What to call what the recorder is doing now: the most urgent connection's
+	 * state while running, the lifecycle state otherwise (#66).
 	 *
-	 * <p>Slot 0 is the single connection the recorder has always had, so with one
-	 * connection this is exactly what it reported before slots. Reporting every
-	 * slot, and the worst of them at the top, is #66; until then more than one
-	 * connection is not switched on (#67).
+	 * <p>Most urgent first: RECONNECTING (a connection that should be up is not),
+	 * then RECORDING, then IDLE (a slot waiting for something to carry). So a
+	 * recorder with one connection reconnecting says so even while another
+	 * records, and one connection recording keeps the whole recorder RECORDING
+	 * while an extra slot sits idle — which is what keeps the machine awake.
+	 * With one connection this is that connection's state, as it always was.
 	 */
 	@Override
 	public RecorderState state() {
-		Connection first = first();
-		return first == null ? state : first.state();
+		Connection urgent = mostUrgent();
+		return urgent == null ? state : urgent.state();
 	}
 
 	/**
-	 * Since when the recorder has been in {@link #state()}.
+	 * Since when the recorder has been in {@link #state()}: the longest any
+	 * connection in that state has been in it.
 	 *
 	 * <p>What makes a state answerable. RECONNECTING for four seconds is a
 	 * reconnect; RECONNECTING for forty minutes is an outage, and the word alone
@@ -580,8 +583,8 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 	 */
 	@Override
 	public Instant stateSince() {
-		Connection first = first();
-		return first == null ? stateSince : first.stateSince();
+		Connection urgent = mostUrgent();
+		return urgent == null ? stateSince : urgent.stateSince();
 	}
 
 	private void enter(RecorderState next) {
@@ -589,22 +592,51 @@ class RecorderSupervisor implements SmartLifecycle, RecorderStatus {
 		stateSince = clock.instant();
 	}
 
-	/** Slot 0's count, for the same reason {@link #state()} is slot 0's (#66). */
+	/** The most any connection has failed in a row: one failing connection is failing. */
 	@Override
 	public int consecutiveFailedAttempts() {
-		Connection first = first();
-		return first == null ? 0 : first.consecutiveFailedAttempts();
+		return connections.stream().mapToInt(Connection::consecutiveFailedAttempts).max()
+				.orElse(0);
 	}
 
-	/** Slot 0's session in flight, or {@code null} when it is recording nothing. */
-	@Nullable Recording current() {
-		Connection first = first();
-		return first == null ? null : first.recording;
+	/** Each connection as health reports it, in slot order; empty while not running. */
+	List<ConnectionStatus> connectionStatuses() {
+		return connections.stream().map(c -> new ConnectionStatus(c.slot, c.state(),
+				c.stateSince(), c.consecutiveFailedAttempts(), c.recording)).toList();
 	}
 
-	private @Nullable Connection first() {
-		List<Connection> current = connections;
-		return current.isEmpty() ? null : current.getFirst();
+	/**
+	 * One connection's facts, for health.
+	 *
+	 * @param recording its session in flight, or null while it is recording nothing
+	 */
+	record ConnectionStatus(int connectionSlot, RecorderState state, Instant stateSince,
+			int consecutiveFailedAttempts, @Nullable Recording recording) {}
+
+	/** The connection whose state the recorder reports; ties go to the longest in it. */
+	private @Nullable Connection mostUrgent() {
+		Connection urgent = null;
+		for (Connection connection : connections) {
+			if (urgent == null || moreUrgent(connection, urgent)) {
+				urgent = connection;
+			}
+		}
+		return urgent;
+	}
+
+	private static boolean moreUrgent(Connection candidate, Connection than) {
+		int a = urgency(candidate.state());
+		int b = urgency(than.state());
+		return a != b ? a > b : candidate.stateSince().isBefore(than.stateSince());
+	}
+
+	private static int urgency(RecorderState state) {
+		return switch (state) {
+			case RECONNECTING -> 3;
+			case RECORDING -> 2;
+			case IDLE -> 1;
+			case DISABLED, NO_SOURCE, STANDBY, STOPPED -> 0;
+		};
 	}
 
 	/**

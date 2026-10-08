@@ -145,6 +145,30 @@ class OperationalScreensTest {
             .andExpect(jsonPath("$[1].marketsInPlay").value(0));
     }
 
+    /**
+     * A gap's cost is the markets ITS connection carried (#66): a gap on slot 1
+     * cost nothing of slot 0's match.
+     */
+    @Test
+    void aGapCountsOnlyTheMarketsItsConnectionCarried() throws Exception {
+        scoped("1.900000001", "English Premier League", true, "DONE", 40_000, 20);
+        jdbc.sql("update ledger.market_scope set connection_slot = 0").update();
+        jdbc.sql("""
+                insert into ledger.capture_session
+                  (session_id, started_at, origin, build_version, config_json, markets,
+                   messages, gap_count, gap_total_ms, max_gap_ms, gaps_sleep, gaps_silence,
+                   gaps_disconnect, connection_slot, ledger_run_id)
+                values (1, now() - interval '21 hours', 'RESIDENT', 'test', '{}'::jsonb,
+                        0, 0, 0, 0, 0, 0, 0, 0, 1, :run)""")
+            .param("run", ledgerRunId)
+            .update();
+        gap(1, 19, 40, "SILENCE");
+
+        mvc.perform(get("/api/gaps"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].marketsInPlay").value(0));
+    }
+
     @Test
     void sourceFilesSummariseWhatCustodyHolds() throws Exception {
         jdbc.sql("""

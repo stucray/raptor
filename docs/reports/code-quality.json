@@ -3,10 +3,10 @@
     "tool": "pmd",
     "tool_version": "7.24.0",
     "ruleset": "pmd-ruleset.xml",
-    "total_findings": 81,
+    "total_findings": 84,
     "by_priority": {
       "2": 5,
-      "3": 76
+      "3": 79
     }
   },
   "findings": [
@@ -424,10 +424,34 @@
       "priority": 3,
       "package": "com.stucray.raptor.recorder",
       "class": "RecorderHealthIndicator",
+      "method": "detail",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderHealthIndicator.java",
+      "begin_line": 81,
+      "end_line": 81,
+      "message": "Ensure that resources like this Recording object are closed after use"
+    },
+    {
+      "rule": "CloseResource",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderHealthIndicator",
       "method": "health",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderHealthIndicator.java",
-      "begin_line": 47,
-      "end_line": 47,
+      "begin_line": 60,
+      "end_line": 60,
+      "message": "Ensure that resources like this Recording object are closed after use"
+    },
+    {
+      "rule": "CloseResource",
+      "ruleset": "Error Prone",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderHealthIndicator",
+      "method": "quietest",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderHealthIndicator.java",
+      "begin_line": 109,
+      "end_line": 109,
       "message": "Ensure that resources like this Recording object are closed after use"
     },
     {
@@ -657,6 +681,18 @@
       "begin_line": 50,
       "end_line": 50,
       "message": "Possible God Class (WMC=70, ATFD=7, TCC=31.579%)"
+    },
+    {
+      "rule": "GodClass",
+      "ruleset": "Design",
+      "priority": 3,
+      "package": "com.stucray.raptor.recorder",
+      "class": "RecorderSupervisor",
+      "method": "",
+      "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
+      "begin_line": 52,
+      "end_line": 52,
+      "message": "Possible God Class (WMC=51, ATFD=8, TCC=18.954%)"
     },
     {
       "rule": "ImplicitFunctionalInterface",
@@ -894,8 +930,8 @@
       "class": "CollectorHealthController",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/health/CollectorHealthController.java",
-      "begin_line": 37,
-      "end_line": 476,
+      "begin_line": 38,
+      "end_line": 494,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
@@ -907,7 +943,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java",
       "begin_line": 52,
-      "end_line": 630,
+      "end_line": 662,
       "message": "This class has too many methods, consider refactoring it."
     },
     {

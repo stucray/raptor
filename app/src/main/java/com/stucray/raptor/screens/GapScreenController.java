@@ -1,5 +1,6 @@
 package com.stucray.raptor.screens;
 
+import com.stucray.raptor.projection.ConnectionSlot;
 import com.stucray.raptor.projection.PlayWindow;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -43,10 +44,14 @@ class GapScreenController {
                         where %1$s
                           and g.started_at < case when s.state = 'DONE'
                                   then s.state_changed_at else now() end
-                          and g.ended_at > %2$s) as markets_in_play
+                          and g.ended_at > %2$s
+                          and %3$s) as markets_in_play
                 from ledger.capture_gap g
+                -- Only the markets the gapped session's connection carried (#66).
+                left join ledger.capture_session q on q.session_id = g.session_id
                 order by g.started_at desc, g.id desc
-                limit :limit""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS))
+                limit :limit""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS,
+                ConnectionSlot.carries("q.connection_slot")))
             .param("limit", limit)
             .query((rs, i) -> new GapView(
                 rs.getLong("id"),

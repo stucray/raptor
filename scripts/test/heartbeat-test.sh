@@ -484,5 +484,17 @@ expect_status "$out" OK
 expect_sent_count 0 "no assertion, nothing in scope"
 teardown
 
+# --- 30: with several connections, the top-level state is what is judged (#66)
+# The recorder reports each connection slot in its own block and the most
+# urgent at the top. One connection RECONNECTING with markets in scope while
+# another records is a recorder that is not capturing what it should, and the
+# block beside it must not change how the heartbeat reads the payload.
+slots_json='{"status":"OUT_OF_SERVICE","components":{"scope":{"status":"UP","details":{"marketsInScope":12}},"captureCoverage":{"status":"OUT_OF_SERVICE","details":{"reason":"recorder is not capturing"}},"recorder":{"status":"UP","details":{"state":"RECONNECTING","secondsSinceLastFrame":0.4,"connections":[{"connectionSlot":0,"state":"RECORDING","secondsSinceLastFrame":0.4},{"connectionSlot":1,"state":"RECONNECTING","consecutiveFailedAttempts":4}]}}}}'
+setup "$slots_json"
+out=$(run); out=$(run); out=$(run)
+[[ "$(grep -c . "$work/restarts.log")" == "1" ]] && pass \
+  || fail "a recorder with one connection wedged was restarted $(grep -c . "$work/restarts.log") time(s), expected once"
+teardown
+
 echo "  $passed passed, $failed failed"
 exit $(( failed > 0 ? 1 : 0 ))

@@ -78,13 +78,19 @@ class CaptureGapLedger implements GapHistory {
 				(select count(*) from ledger.market_scope s
 					where s.first_seen_at < g.ended_at
 						and g.started_at < case when s.state = 'DONE'
-							then s.state_changed_at else :now end) as markets,
+							then s.state_changed_at else :now end
+						and %3$s) as markets,
 				(select count(*) from ledger.market_scope s
 					where %1$s
 						and g.ended_at > %2$s
 						and g.started_at < case when s.state = 'DONE'
-							then s.state_changed_at else :now end) as live
+							then s.state_changed_at else :now end
+						and %3$s) as live
 			from ledger.capture_gap g
+			-- The gapped session's connection: a gap costs only the markets that
+			-- connection carried (#66). A session the ledger has not projected yet
+			-- reads as slot 0, which is what every gap meant before slots.
+			left join ledger.capture_session q on q.session_id = g.session_id
 			where g.started_at > :since
 				and g.ended_at - g.started_at >= cast(:floor as interval)
 				and exists (
@@ -92,9 +98,11 @@ class CaptureGapLedger implements GapHistory {
 					where %1$s
 						and g.started_at < case when s.state = 'DONE'
 							then s.state_changed_at else :now end
-						and g.ended_at > %2$s)
+						and g.ended_at > %2$s
+						and %3$s)
 			order by g.ended_at desc, g.id desc
-			limit 1""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS);
+			limit 1""".formatted(PlayWindow.WENT_IN_PLAY, PlayWindow.STARTS,
+			ConnectionSlot.carries("q.connection_slot"));
 
 	private final JdbcClient jdbc;
 	private final Clock clock;
