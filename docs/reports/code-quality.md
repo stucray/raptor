@@ -58,8 +58,8 @@ Sorted by PMD priority (lower = more severe), then by line-span.
 | `TooManyMethods` | [`RecorderSupervisor.java#L52`](../../src/main/java/com/stucray/raptor/recorder/RecorderSupervisor.java#L52) | — | This class has too many methods, consider refactoring it. |
 | `TooManyMethods` | [`BetfairCatalogue.java#L52`](../../src/main/java/com/stucray/raptor/betfair/BetfairCatalogue.java#L52) | — | This class has too many methods, consider refactoring it. |
 | `TooManyMethods` | [`CollectorHealthController.java#L38`](../../src/main/java/com/stucray/raptor/health/CollectorHealthController.java#L38) | — | This class has too many methods, consider refactoring it. |
-| `TooManyMethods` | [`MarketScopeService.java#L62`](../../src/main/java/com/stucray/raptor/scope/MarketScopeService.java#L62) | — | This class has too many methods, consider refactoring it. |
 | `TooManyMethods` | [`TlsStreamSource.java#L50`](../../src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java#L50) | — | This class has too many methods, consider refactoring it. |
+| `TooManyMethods` | [`MarketScopeService.java#L62`](../../src/main/java/com/stucray/raptor/scope/MarketScopeService.java#L62) | — | This class has too many methods, consider refactoring it. |
 
 ## Re-running this report
 

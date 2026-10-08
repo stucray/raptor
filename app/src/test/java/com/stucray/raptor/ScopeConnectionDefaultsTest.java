@@ -11,14 +11,14 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Scope stays on one connection of 200 markets until the recorder can run
- * several (#64, #65), in both places it is defaulted.
+ * Scope may use up to four connections of 200 markets (#67), in both places
+ * it is defaulted.
  *
- * <p>A second connection planned before the recorder can hold one would put
- * fixtures on a slot nothing subscribes, and they would be lost without a word.
- * #67 raises {@code max-connections} and changes this pin with it.
+ * <p>Four is the operator's share of the app key's ten connections, which every
+ * session on the key shares (#63). Raising it spends connections other
+ * applications on the account may need; lowering it caps capture.
  */
-@DisplayName("Scope defaults to one connection of 200 markets until #67")
+@DisplayName("Scope defaults to up to four connections of 200 markets")
 class ScopeConnectionDefaultsTest {
 
 	@Configuration(proxyBeanMethods = false)
@@ -34,7 +34,7 @@ class ScopeConnectionDefaultsTest {
 				.withUserConfiguration(Bind.class)
 				.run(context -> {
 					ScopeProperties scope = context.getBean(ScopeProperties.class);
-					assertThat(scope.maxConnections()).isEqualTo(1);
+					assertThat(scope.maxConnections()).isEqualTo(4);
 					assertThat(scope.marketsPerConnection()).isEqualTo(200);
 				});
 	}
@@ -46,7 +46,7 @@ class ScopeConnectionDefaultsTest {
 				.withUserConfiguration(Bind.class)
 				.run(context -> {
 					ScopeProperties scope = context.getBean(ScopeProperties.class);
-					assertThat(scope.maxConnections()).isEqualTo(1);
+					assertThat(scope.maxConnections()).isEqualTo(4);
 					assertThat(scope.marketsPerConnection()).isEqualTo(200);
 				});
 	}

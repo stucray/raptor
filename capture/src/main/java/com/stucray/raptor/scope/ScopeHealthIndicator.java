@@ -41,13 +41,15 @@ class ScopeHealthIndicator implements HealthIndicator {
 	private final ScopeCensus census;
 	private final KickoffLookahead lookahead;
 	private final CatalogueEntries entries;
+	private final ScopeProperties properties;
 	private final Clock clock;
 
 	ScopeHealthIndicator(ScopeCensus census, KickoffLookahead lookahead, CatalogueEntries entries,
-			Clock clock) {
+			ScopeProperties properties, Clock clock) {
 		this.census = census;
 		this.lookahead = lookahead;
 		this.entries = entries;
+		this.properties = properties;
 		this.clock = clock;
 	}
 
@@ -64,7 +66,12 @@ class ScopeHealthIndicator implements HealthIndicator {
 				// market enters scope, so a market can rightly be counted here for up
 				// to a poll interval. What matters is a count that does not fall,
 				// because once the market closes Betfair no longer serves the entry.
-				.withDetail("marketsWithoutCatalogueEntry", entries.inScopeWithoutEntry());
+				.withDetail("marketsWithoutCatalogueEntry", entries.inScopeWithoutEntry())
+				// The capacity the planner is working to, as the RUNNING application
+				// has it (#67): a setting changed for a verification and not changed
+				// back is visible here, where the file it came from would say nothing.
+				.withDetail("maxConnections", properties.maxConnections())
+				.withDetail("marketsPerConnection", properties.marketsPerConnection());
 		Instant next = scope.nextKickoff();
 		if (next != null) {
 			// The one fact that makes an empty horizon legible rather than merely

@@ -155,7 +155,12 @@ final class TlsStreamSource implements StreamSource {
 				checkStatus(message);
 				JsonNode id = message.get("id");
 				if (id == null || id.asLong() == authId) {
-					log.info("Betfair stream authenticated ({})", connection.describe());
+					// connectionsAvailable is what is left of the key's allowance, which
+					// every session on the key shares (#63): it falls by one for each
+					// connection open, whichever application holds it.
+					log.info("Betfair stream authenticated on connection slot {} ({}); "
+							+ "connections available on the key: {}", connectionSlot,
+							connection.describe(), text(message, "connectionsAvailable"));
 					return;
 				}
 				continue;

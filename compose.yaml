@@ -133,6 +133,19 @@ services:
       # /actuator/health/capture and holds `caffeinate` while it says RECORDING
       # (#107). `bin/deploy-agents` installs it; `scripts/keep-awake --status` checks it.
       RAPTOR_SCOPE_POWER_ASSERTION: "false"
+      # How scope is partitioned across stream connections (#63). Passed through
+      # so a run can change them without an image: the defaults here are
+      # application.yml's, and changing either restarts the recorder, so it is
+      # done with nothing in scope (`lid` SAFE). A verification that needs a
+      # second connection on a card that would not otherwise fill one lowers
+      # markets-per-connection for that card only:
+      #
+      #     RAPTOR_SCOPE_MARKETS_PER_CONNECTION=8 bin/up
+      #
+      # and a plain `bin/up` puts it back. /actuator/health/capture shows the
+      # values the running application has, under the scope contributor.
+      RAPTOR_SCOPE_MARKETS_PER_CONNECTION: ${RAPTOR_SCOPE_MARKETS_PER_CONNECTION:-200}
+      RAPTOR_SCOPE_MAX_CONNECTIONS: ${RAPTOR_SCOPE_MAX_CONNECTIONS:-4}
       # The spill lives on the HOST. Left inside the container it would be
       # written to the overlay filesystem, which is discarded the next time the
       # image is rebuilt — so the one file whose entire purpose is to survive a
