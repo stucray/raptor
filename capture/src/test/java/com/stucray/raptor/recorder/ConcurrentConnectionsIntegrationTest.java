@@ -1,9 +1,12 @@
 package com.stucray.raptor.recorder;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.stucray.raptor.TestcontainersConfiguration;
 import com.stucray.raptor.datasource.Acquisition;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +33,7 @@ class ConcurrentConnectionsIntegrationTest {
 	@Autowired RecorderPipeline pipeline;
 	@Autowired Clock clock;
 	@Autowired @Acquisition JdbcClient jdbc;
+	@Autowired MeterRegistry meters;
 
 	@Test
 	void eachConnectionLandsEveryMessageInItsOwnSessionAndNothingIsQuarantined()
@@ -55,6 +59,17 @@ class ConcurrentConnectionsIntegrationTest {
 				.param(slotZero).query(Integer.class).single()).isZero();
 		assertThat(jdbc.sql("select connection_slot from raw.capture_session where id = ?")
 				.param(slotOne).query(Integer.class).single()).isEqualTo(1);
+		// The meters are per connection too (#66): two series, not whichever
+		// recording started last.
+		assertThat(written("0")).isEqualTo(CaptureSampleFiles.totalMessageLines());
+		assertThat(written("1")).isEqualTo(CaptureSampleFiles.totalMessageLines());
+	}
+
+	private double written(String connectionSlot) {
+		Gauge gauge = meters.find("raptor.recorder.messages.written")
+				.tag("connection_slot", connectionSlot).gauge();
+		assertThat(gauge).as("the written gauge for slot %s", connectionSlot).isNotNull();
+		return requireNonNull(gauge).value();
 	}
 
 	private long rows(long sessionId) {

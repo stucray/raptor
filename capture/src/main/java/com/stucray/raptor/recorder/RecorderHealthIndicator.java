@@ -4,6 +4,10 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
@@ -20,6 +24,10 @@ import org.springframework.stereotype.Component;
  * recorder that believes it is recording while nothing arrives, and the watchdog
  * reaches that case first by tearing the stream down; the seconds since the last
  * frame are reported here so the condition is visible either way.
+ *
+ * <p>Each connection slot is reported in its own block (#66), and the top-level
+ * fields keep their names and report the worst: the most urgent state, and the
+ * quietest recording's session and silence.
  */
 @Component
 class RecorderHealthIndicator implements HealthIndicator {
@@ -32,7 +40,8 @@ class RecorderHealthIndicator implements HealthIndicator {
 		this.clock = clock;
 
 		Gauge.builder("raptor.recorder.silence.seconds", this, RecorderHealthIndicator::silence)
-				.description("Seconds since the last frame arrived, or -1 when not recording")
+				.description("Seconds since the last frame arrived on the quietest connection, "
+						+ "or -1 when not recording")
 				.register(meters);
 	}
 
@@ -44,23 +53,65 @@ class RecorderHealthIndicator implements HealthIndicator {
 				// correct, RECONNECTING for six hours is an outage nobody was told
 				// about, and the word is the same length in both (#144).
 				.withDetail("secondsInState", secondsInState());
-		Recording current = supervisor.current();
-		if (current != null) {
-			health.withDetail("sessionId", current.sessionId())
-					.withDetail("framed", current.framed())
-					.withDetail("written", current.written())
-					.withDetail("secondsSinceLastFrame", silence());
+		List<RecorderSupervisor.ConnectionStatus> statuses = supervisor.connectionStatuses();
+		// The top-level session fields keep their names and report the quietest
+		// recording, the one a stalled stream would be (#66): the heartbeat alarms
+		// on secondsSinceLastFrame, and the worst connection is the one it must see.
+		Recording quietest = quietest(statuses);
+		if (quietest != null) {
+			health.withDetail("sessionId", quietest.sessionId())
+					.withDetail("framed", quietest.framed())
+					.withDetail("written", quietest.written())
+					.withDetail("secondsSinceLastFrame", silence(quietest));
+		}
+		if (!statuses.isEmpty()) {
+			health.withDetail("connections", statuses.stream().map(this::detail).toList());
 		}
 		return health.build();
+	}
+
+	/** One connection, as the per-slot block reports it (#66). */
+	private Map<String, Object> detail(RecorderSupervisor.ConnectionStatus status) {
+		Map<String, Object> detail = new LinkedHashMap<>();
+		detail.put("connectionSlot", status.connectionSlot());
+		detail.put("state", status.state().name());
+		detail.put("secondsInState",
+				Duration.between(status.stateSince(), clock.instant()).toMillis() / 1000d);
+		detail.put("consecutiveFailedAttempts", status.consecutiveFailedAttempts());
+		Recording recording = status.recording();
+		if (recording != null) {
+			detail.put("sessionId", recording.sessionId());
+			detail.put("framed", recording.framed());
+			detail.put("written", recording.written());
+			detail.put("secondsSinceLastFrame", silence(recording));
+		}
+		return detail;
 	}
 
 	private double secondsInState() {
 		return Duration.between(supervisor.stateSince(), clock.instant()).toMillis() / 1000d;
 	}
 
+	/** The longest silence of any recording, or -1 when nothing is recording. */
 	private double silence() {
-		Recording current = supervisor.current();
-		return current == null ? -1
-				: Duration.between(current.lastFrameAt(), clock.instant()).toMillis() / 1000d;
+		Recording quietest = quietest(supervisor.connectionStatuses());
+		return quietest == null ? -1 : silence(quietest);
+	}
+
+	private double silence(Recording recording) {
+		return Duration.between(recording.lastFrameAt(), clock.instant()).toMillis() / 1000d;
+	}
+
+	private static @Nullable Recording quietest(
+			List<RecorderSupervisor.ConnectionStatus> statuses) {
+		Recording quietest = null;
+		for (RecorderSupervisor.ConnectionStatus status : statuses) {
+			Recording recording = status.recording();
+			if (recording != null && (quietest == null
+					|| recording.lastFrameAt().isBefore(quietest.lastFrameAt()))) {
+				quietest = recording;
+			}
+		}
+		return quietest;
 	}
 }

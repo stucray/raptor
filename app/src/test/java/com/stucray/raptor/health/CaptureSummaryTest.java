@@ -346,6 +346,125 @@ class CaptureSummaryTest {
     }
 
     /**
+     * A gap costs only the markets its own connection carried (#66).
+     *
+     * <p>Slot 0 records a match while slot 1, carrying nothing in play, has a
+     * gap. Nothing in play was lost. Read across every connection, as it was
+     * before slots, the gap would be charged with slot 0's match.
+     */
+    @Test
+    void aGapCostsOnlyTheMarketsItsOwnConnectionCarried() throws Exception {
+        scoped("1.slot0", true, "DONE", 40_000, 20);
+        slot("market_scope", "market_id", "'1.slot0'", 0);
+        sessionSpanning(1, 21 * 60, 12 * 60);
+        slot("capture_session", "session_id", "1", 0);
+        sessionSpanning(2, 21 * 60, 12 * 60);
+        slot("capture_session", "session_id", "2", 1);
+        // A gap on slot 1, during slot 0's match: slot 1 carried nothing in play.
+        gapOn(1, 2, 19, 5);
+
+        mvc.perform(get("/api/health/capture-summary"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.gapsDuringPlay").value(0));
+    }
+
+    /**
+     * A restart is the interval between two sessions on the SAME connection
+     * (#66).
+     *
+     * <p>Slot 0 records the match throughout. Slot 1 stops and starts inside the
+     * match, carrying nothing in play, so nothing was lost. Read across every
+     * connection, slot 1's interval would be a restart during play.
+     */
+    @Test
+    void aRestartIsCountedOnlyAgainstItsOwnConnection() throws Exception {
+        scoped("1.slot0", true, "DONE", 40_000, 20);
+        slot("market_scope", "market_id", "'1.slot0'", 0);
+        sessionSpanning(1, 21 * 60, 12 * 60);
+        slot("capture_session", "session_id", "1", 0);
+        sessionSpanning(2, 20 * 60, 19 * 60);
+        sessionSpanning(3, 19 * 60 - 5, 12 * 60);
+        slot("capture_session", "session_id", "2, 3", 1);
+
+        mvc.perform(get("/api/health/capture-summary"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.restartsDuringPlay").value(0));
+    }
+
+    /**
+     * And a restart on one connection is still seen when another connection's
+     * session starts in the middle of it (#66).
+     *
+     * <p>Slot 0 stops at 19h ago and is back five minutes later, inside its
+     * match; slot 1 opened at 20h ago and runs on. In one sequence across every
+     * connection, slot 0's stop would be followed by slot 1's earlier start, and
+     * the restart would vanish.
+     */
+    @Test
+    void aRestartOnOneConnectionIsSeenThoughAnotherConnectionStartedDuringIt()
+            throws Exception {
+        scoped("1.slot0", true, "DONE", 40_000, 20);
+        slot("market_scope", "market_id", "'1.slot0'", 0);
+        sessionSpanning(1, 21 * 60, 19 * 60);
+        sessionSpanning(3, 19 * 60 - 5, 12 * 60);
+        slot("capture_session", "session_id", "1, 3", 0);
+        sessionSpanning(2, 20 * 60, 12 * 60);
+        slot("capture_session", "session_id", "2", 1);
+
+        mvc.perform(get("/api/health/capture-summary"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.restartsDuringPlay").value(1));
+    }
+
+    /**
+     * A later session on ANOTHER connection says nothing about whether this one
+     * is still running (#66): slot 1 opening while slot 0 records is two live
+     * sessions, not a killed one.
+     */
+    @Test
+    void anOpenSessionIsAbandonedOnlyWhenItsOwnConnectionMovedOn() throws Exception {
+        session(1, 9, null);
+        slot("capture_session", "session_id", "1", 0);
+        session(2, 2, null);
+        slot("capture_session", "session_id", "2", 1);
+
+        mvc.perform(get("/api/health/capture-sessions"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[1].sessionId").value(1))
+            .andExpect(jsonPath("$[1].abandoned").value(false));
+
+        session(3, 1, null);
+        slot("capture_session", "session_id", "3", 0);
+
+        mvc.perform(get("/api/health/capture-sessions"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[2].sessionId").value(1))
+            .andExpect(jsonPath("$[2].abandoned").value(true));
+    }
+
+    /** Put rows of a ledger table on a connection slot. */
+    private void slot(String table, String key, String values, int connectionSlot) {
+        jdbc.sql("update ledger." + table + " set connection_slot = " + connectionSlot
+                + " where " + key + " in (" + values + ")").update();
+    }
+
+    /** A gap on a given session, with its start in hours ago. */
+    private void gapOn(long id, long sessionId, int startedHoursAgo, int minutes) {
+        jdbc.sql("""
+                insert into ledger.capture_gap
+                  (id, session_id, started_at, ended_at, cause, ledger_run_id)
+                values (:id, :session, now() - make_interval(hours => :ago),
+                        now() - make_interval(hours => :ago) + make_interval(mins => :mins),
+                        'SILENCE', :projection)""")
+            .param("id", id)
+            .param("session", sessionId)
+            .param("ago", startedHoursAgo)
+            .param("mins", minutes)
+            .param("projection", ledgerRunId)
+            .update();
+    }
+
+    /**
      * Every figure in the summary is read from the ledger, so the summary says
      * when the ledger was last rebuilt: a refresh that has stopped would
      * otherwise show a frozen picture with full confidence.

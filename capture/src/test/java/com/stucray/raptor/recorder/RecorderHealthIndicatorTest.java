@@ -9,6 +9,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.Status;
@@ -36,7 +39,8 @@ class RecorderHealthIndicatorTest {
 		when(recording.framed()).thenReturn(1_200L);
 		when(recording.written()).thenReturn(1_190L);
 		when(recording.lastFrameAt()).thenReturn(NOW.minusSeconds(4));
-		when(supervisor.current()).thenReturn(recording);
+		when(supervisor.connectionStatuses()).thenReturn(List.of(new RecorderSupervisor
+				.ConnectionStatus(0, RecorderState.RECORDING, NOW.minusSeconds(90), 0, recording)));
 		when(supervisor.state()).thenReturn(RecorderState.RECORDING);
 
 		Health health = indicator.health();
@@ -63,7 +67,7 @@ class RecorderHealthIndicatorTest {
 	@Test
 	void idleIsUpAndCarriesHowLongItHasBeenIdle() {
 		when(supervisor.state()).thenReturn(RecorderState.IDLE);
-		when(supervisor.current()).thenReturn(null);
+		when(supervisor.connectionStatuses()).thenReturn(List.of());
 		when(supervisor.stateSince()).thenReturn(NOW.minus(Duration.ofHours(6)));
 
 		Health health = indicator.health();
@@ -74,11 +78,57 @@ class RecorderHealthIndicatorTest {
 				.doesNotContainKey("sessionId");
 	}
 
+	/**
+	 * Every connection in its own block, and the worst at the top (#66).
+	 *
+	 * <p>The top-level fields keep their names, because the heartbeat, keep-awake
+	 * and the post-boot check read them. They report the quietest recording,
+	 * which is the one a stalled stream would be: a healthy connection beside a
+	 * silent one must not average the silence away.
+	 */
+	@Test
+	void reportsEachConnectionAndTheQuietestAtTheTop() {
+		when(supervisor.state()).thenReturn(RecorderState.RECONNECTING);
+		when(supervisor.stateSince()).thenReturn(NOW.minusSeconds(30));
+		Recording busy = recording(7L, NOW.minusSeconds(2));
+		Recording quiet = recording(8L, NOW.minusSeconds(40));
+		when(supervisor.connectionStatuses()).thenReturn(List.of(
+				new RecorderSupervisor.ConnectionStatus(0, RecorderState.RECORDING,
+						NOW.minusSeconds(600), 0, busy),
+				new RecorderSupervisor.ConnectionStatus(1, RecorderState.RECORDING,
+						NOW.minusSeconds(300), 0, quiet),
+				new RecorderSupervisor.ConnectionStatus(2, RecorderState.RECONNECTING,
+						NOW.minusSeconds(30), 3, null)));
+
+		Health health = indicator.health();
+
+		assertThat(health.getDetails()).containsEntry("state", "RECONNECTING")
+				.containsEntry("sessionId", 8L)
+				.containsEntry("secondsSinceLastFrame", 40.0);
+		assertThat(health.getDetails().get("connections")).asInstanceOf(InstanceOfAssertFactories.LIST)
+				.containsExactly(
+						Map.of("connectionSlot", 0, "state", "RECORDING", "secondsInState", 600.0,
+								"consecutiveFailedAttempts", 0, "sessionId", 7L, "framed", 0L,
+								"written", 0L, "secondsSinceLastFrame", 2.0),
+						Map.of("connectionSlot", 1, "state", "RECORDING", "secondsInState", 300.0,
+								"consecutiveFailedAttempts", 0, "sessionId", 8L, "framed", 0L,
+								"written", 0L, "secondsSinceLastFrame", 40.0),
+						Map.of("connectionSlot", 2, "state", "RECONNECTING", "secondsInState", 30.0,
+								"consecutiveFailedAttempts", 3));
+	}
+
+	private static Recording recording(long sessionId, Instant lastFrame) {
+		Recording recording = mock(Recording.class);
+		when(recording.sessionId()).thenReturn(sessionId);
+		when(recording.lastFrameAt()).thenReturn(lastFrame);
+		return recording;
+	}
+
 	/** Standby is single-writer working, not a fault. */
 	@Test
 	void standbyIsUp() {
 		when(supervisor.state()).thenReturn(RecorderState.STANDBY);
-		when(supervisor.current()).thenReturn(null);
+		when(supervisor.connectionStatuses()).thenReturn(List.of());
 		when(supervisor.stateSince()).thenReturn(NOW);
 
 		Health health = indicator.health();
@@ -92,7 +142,7 @@ class RecorderHealthIndicatorTest {
 	@Test
 	void noSourceIsUp() {
 		when(supervisor.state()).thenReturn(RecorderState.NO_SOURCE);
-		when(supervisor.current()).thenReturn(null);
+		when(supervisor.connectionStatuses()).thenReturn(List.of());
 		when(supervisor.stateSince()).thenReturn(NOW);
 
 		assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);

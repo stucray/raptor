@@ -111,7 +111,7 @@ class CaptureLedgerWriter {
 				session_id, source_key, started_at, ended_at, origin, exit_status,
 				exit_detail, build_version, config_json, markets, messages, conflated,
 				first_message_at, last_message_at, gap_count, gap_total_ms, max_gap_ms,
-				gaps_sleep, gaps_silence, gaps_disconnect, ledger_run_id)
+				gaps_sleep, gaps_silence, gaps_disconnect, connection_slot, ledger_run_id)
 			select s.id, s.source_key, s.started_at, s.ended_at, s.origin, s.exit_status,
 				s.exit_detail, s.build_version, s.config_json,
 				coalesce(m.markets, 0), coalesce(m.messages, 0),
@@ -119,7 +119,7 @@ class CaptureLedgerWriter {
 				coalesce(g.gap_count, 0), coalesce(g.gap_total_ms, 0),
 				coalesce(g.max_gap_ms, 0), coalesce(g.gaps_sleep, 0),
 				coalesce(g.gaps_silence, 0), coalesce(g.gaps_disconnect, 0),
-				:ledgerRunId
+				s.connection_slot, :ledgerRunId
 			from raw.capture_session s
 			left join (
 				select session_id,
@@ -192,12 +192,13 @@ class CaptureLedgerWriter {
 			insert into ledger.market_scope (
 				market_id, event_id, event_name, competition_id, competition_name,
 				market_type, country_code, kickoff, requested, state, exit_reason,
-				first_seen_at, state_changed_at, in_play_since, messages, ledger_run_id)
+				first_seen_at, state_changed_at, in_play_since, messages, connection_slot,
+				ledger_run_id)
 			select s.market_id, s.event_id, s.event_name, s.competition_id,
 				s.competition_name, s.market_type, s.country_code, s.kickoff,
 				s.requested, s.state, s.exit_reason, s.first_seen_at,
 				s.state_changed_at, s.in_play_since,
-				coalesce(m.messages, 0), :ledgerRunId
+				coalesce(m.messages, 0), s.connection_slot, :ledgerRunId
 			from raw.market_scope s
 			left join (
 				select w.market_id, cast(sum(c.n) as bigint) as messages
@@ -256,10 +257,10 @@ class CaptureLedgerWriter {
 					select 1 from ledger.capture_session q
 					where q.session_id = s.id
 						and (q.source_key, q.started_at, q.ended_at, q.origin, q.exit_status,
-								q.exit_detail, q.build_version, q.config_json)
+								q.exit_detail, q.build_version, q.config_json, q.connection_slot)
 							is distinct from
 							(s.source_key, s.started_at, s.ended_at, s.origin, s.exit_status,
-								s.exit_detail, s.build_version, s.config_json))
+								s.exit_detail, s.build_version, s.config_json, s.connection_slot))
 				-- A spill replayed after this row was derived. THIS is the guard that
 				-- matters for the counts; see FREEZE_GRACE.
 				or exists (
@@ -295,11 +296,13 @@ class CaptureLedgerWriter {
 					where q.market_id = s.market_id
 						and (q.event_id, q.event_name, q.competition_id, q.competition_name,
 								q.market_type, q.country_code, q.kickoff, q.requested, q.state,
-								q.exit_reason, q.first_seen_at, q.state_changed_at, q.in_play_since)
+								q.exit_reason, q.first_seen_at, q.state_changed_at, q.in_play_since,
+								q.connection_slot)
 							is distinct from
 							(s.event_id, s.event_name, s.competition_id, s.competition_name,
 								s.market_type, s.country_code, s.kickoff, s.requested, s.state,
-								s.exit_reason, s.first_seen_at, s.state_changed_at, s.in_play_since))
+								s.exit_reason, s.first_seen_at, s.state_changed_at, s.in_play_since,
+								s.connection_slot))
 				-- Any spill replayed after this row was derived. Not correlated to the
 				-- market, because `raw.spill_file` records the session and one file can
 				-- carry messages for every market that session held — so the honest

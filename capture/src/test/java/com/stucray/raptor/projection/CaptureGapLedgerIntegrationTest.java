@@ -189,6 +189,34 @@ class CaptureGapLedgerIntegrationTest {
 		assertThat(gaps.lastGapDuringPlay()).isEmpty();
 	}
 
+	/**
+	 * What a gap cost is what ITS connection carried (#66).
+	 *
+	 * <p>Two matches in play, one on each connection, and a gap on slot 1's
+	 * session: slot 0 went on recording its match, so the gap cost one.
+	 */
+	@Test
+	void countsOnlyTheMarketsOnTheGappedConnection() {
+		market("1.1", now.minusSeconds(7200), now.minusSeconds(3600));
+		market("1.2", now.minusSeconds(7200), now.minusSeconds(3600));
+		jdbc.sql("update ledger.market_scope set connection_slot = case market_id "
+				+ "when '1.1' then 0 else 1 end").update();
+		jdbc.sql("""
+						insert into ledger.capture_session (session_id, started_at, origin,
+							build_version, config_json, markets, messages, gap_count, gap_total_ms,
+							max_gap_ms, gaps_sleep, gaps_silence, gaps_disconnect, connection_slot,
+							ledger_run_id)
+						values (1, ?, 'RESIDENT', 'test', '{}'::jsonb, 0, 0, 0, 0, 0, 0, 0, 0, 1, ?)""")
+				.params(at(now.minusSeconds(7200)), projection)
+				.update();
+		gap(now.minusSeconds(1000), now.minusSeconds(678), "SILENCE");
+
+		assertThat(gaps.lastGapDuringPlay()).hasValueSatisfying(gap -> {
+			assertThat(gap.markets()).isEqualTo(1);
+			assertThat(gap.live()).isEqualTo(1);
+		});
+	}
+
 	private void market(String id, Instant firstSeen, Instant inPlaySince) {
 		insertMarket(id, firstSeen, inPlaySince, "SUBSCRIBED", firstSeen);
 	}

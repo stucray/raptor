@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -47,13 +48,17 @@ class RecorderPipeline {
 	private final Clock clock;
 
 	/**
-	 * The recording the meters read from.
+	 * The recording the meters read from, per connection slot (#66).
 	 *
 	 * <p>One indirection rather than meters registered per session: a Micrometer
 	 * meter id can only be bound once, so re-registering per session would silently
-	 * keep reporting the <em>first</em> session's queue forever.
+	 * keep reporting the <em>first</em> session's queue forever. Keyed by slot, so
+	 * two connections are two series rather than whichever started last; a source
+	 * on no slot (a replay) reports as {@code none}.
 	 */
-	private final AtomicReference<@Nullable Recording> active = new AtomicReference<>();
+	private final Map<String, AtomicReference<@Nullable Recording>> active =
+			new ConcurrentHashMap<>();
+	private final MeterRegistry meters;
 
 	RecorderPipeline(RawWriter writer,
 			@Acquisition PlatformTransactionManager acquisitionTransactionManager,
@@ -66,18 +71,30 @@ class RecorderPipeline {
 		this.properties = properties;
 		this.sessions = sessions;
 		this.clock = clock;
+		this.meters = meters;
+	}
 
-		Gauge.builder("raptor.recorder.queue.depth", () -> read(Recording::queueDepth))
-				.description("Messages accepted from the stream and not yet committed. "
-						+ "Sustained growth is a stalled writer, which is what a wedged "
-						+ "database looks like from the read loop.")
-				.register(meters);
-		Gauge.builder("raptor.recorder.messages.framed", () -> read(Recording::framed))
-				.description("Messages framed off the stream in the current session")
-				.register(meters);
-		Gauge.builder("raptor.recorder.messages.written", () -> read(Recording::written))
-				.description("Messages committed to the system of record in the current session")
-				.register(meters);
+	/** The meters for one connection slot, registered the first time it starts. */
+	private AtomicReference<@Nullable Recording> meter(String slot) {
+		return active.computeIfAbsent(slot, key -> {
+			AtomicReference<@Nullable Recording> recording = new AtomicReference<>();
+			Gauge.builder("raptor.recorder.queue.depth", () -> read(recording, Recording::queueDepth))
+					.description("Messages accepted from the stream and not yet committed. "
+							+ "Sustained growth is a stalled writer, which is what a wedged "
+							+ "database looks like from the read loop.")
+					.tag("connection_slot", key)
+					.register(meters);
+			Gauge.builder("raptor.recorder.messages.framed", () -> read(recording, Recording::framed))
+					.description("Messages framed off the stream in the current session")
+					.tag("connection_slot", key)
+					.register(meters);
+			Gauge.builder("raptor.recorder.messages.written",
+							() -> read(recording, Recording::written))
+					.description("Messages committed to the system of record in the current session")
+					.tag("connection_slot", key)
+					.register(meters);
+			return recording;
+		});
 	}
 
 	/**
@@ -111,7 +128,7 @@ class RecorderPipeline {
 
 		Recording recording = new Recording(sessionId, source, readLoop, writeLoop,
 				readThread, writeThread, queue, sessions);
-		active.set(recording);
+		meter(connectionSlot == null ? "none" : connectionSlot.toString()).set(recording);
 		log.info("capture session {} started: {}", sessionId, source.describe());
 		return recording;
 	}
@@ -134,7 +151,8 @@ class RecorderPipeline {
 		return version == null ? "dev" : version;
 	}
 
-	private double read(java.util.function.ToLongFunction<Recording> value) {
+	private static double read(AtomicReference<@Nullable Recording> active,
+			java.util.function.ToLongFunction<Recording> value) {
 		Recording recording = active.get();
 		return recording == null ? 0 : value.applyAsLong(recording);
 	}
