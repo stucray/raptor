@@ -30,7 +30,7 @@ class ScopeHealthIndicatorTest {
 			new KickoffLookahead(provider(catalogue), scopeProperties(), CLOCK);
 	private final CatalogueEntries entries = mock(CatalogueEntries.class);
 	private final ScopeHealthIndicator indicator =
-			new ScopeHealthIndicator(census, lookahead, entries, CLOCK);
+			new ScopeHealthIndicator(census, lookahead, entries, scopeProperties(), CLOCK);
 
 	/**
 	 * #44: markets without a catalogue entry are counted and reported, and the
@@ -45,6 +45,21 @@ class ScopeHealthIndicatorTest {
 
 		assertThat(health.getStatus()).isEqualTo(Status.UP);
 		assertThat(health.getDetails()).containsEntry("marketsWithoutCatalogueEntry", 3);
+	}
+
+	/**
+	 * The capacity the running application plans to (#67).
+	 *
+	 * <p>A verification lowers markets-per-connection for one card and a plain
+	 * {@code bin/up} puts it back. Whether it is back is a question about the
+	 * running process, which the file it came from cannot answer.
+	 */
+	@Test
+	void reportsTheConnectionCapacityItIsRunningWith() {
+		when(census.summarise()).thenReturn(new ScopeSummary(0, 0, 0, 0, null));
+
+		assertThat(indicator.health().getDetails()).containsEntry("maxConnections", 1)
+				.containsEntry("marketsPerConnection", 200);
 	}
 
 	/** 03:00 on a Tuesday: nothing to record, and nothing wrong. */

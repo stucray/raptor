@@ -69,7 +69,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *     across, each in its own connection slot. The 10 connections an app key
  *     allows are shared by every session on the key, whichever application
  *     opened it (#63), so this is raptor's share of that budget, not the key's
- *     whole allowance. One until the recorder can run several (#65, #67).
+ *     whole allowance. Four since #67, leaving six for every other application
+ *     on the account.
  */
 @ConfigurationProperties("raptor.scope")
 public record ScopeProperties(
@@ -84,7 +85,7 @@ public record ScopeProperties(
 		@DefaultValue("true") boolean holdPowerAssertion,
 		@DefaultValue("3") int pollFailuresBeforeRed,
 		@DefaultValue("200") int marketsPerConnection,
-		@DefaultValue("1") int maxConnections) {
+		@DefaultValue("4") int maxConnections) {
 
 	public ScopeProperties {
 		if (horizon.isNegative() || horizon.isZero()) {

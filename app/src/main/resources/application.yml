@@ -283,9 +283,11 @@ raptor:
     # connection has a numbered connection slot, 0 up to max-connections - 1.
     # The key's 10 connections are shared by every session on it, whichever
     # application opened it, so max-connections is raptor's share of that
-    # budget. One until the recorder can run several (#65); #67 raises it to 4.
+    # budget: four since #67, leaving six for every other application on it.
+    # An extra connection opens only when the ones before it are full, and closes
+    # again when it has nothing left to carry, so four is a ceiling, not a cost.
     markets-per-connection: ${RAPTOR_SCOPE_MARKETS_PER_CONNECTION:200}
-    max-connections: ${RAPTOR_SCOPE_MAX_CONNECTIONS:1}
+    max-connections: ${RAPTOR_SCOPE_MAX_CONNECTIONS:4}
   close-out:
     # The nightly close-out (#199). Since #316 it only fetches the current
     # football-data season into raw: overround-analysis projects query now, as

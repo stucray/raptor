@@ -150,8 +150,8 @@
       "class": "TlsStreamSource",
       "method": "awaitAuthentication",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 163,
-      "end_line": 163,
+      "begin_line": 168,
+      "end_line": 168,
       "message": "Avoid using literals such as \"connection\" in if statements"
     },
     {
@@ -162,8 +162,8 @@
       "class": "TlsStreamSource",
       "method": "checkStatus",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 235,
-      "end_line": 235,
+      "begin_line": 240,
+      "end_line": 240,
       "message": "Avoid using literals such as \"SUBSCRIPTION_LIMIT_EXCEEDED\" in if statements"
     },
     {
@@ -174,8 +174,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 197,
-      "end_line": 197,
+      "begin_line": 202,
+      "end_line": 202,
       "message": "Avoid using literals such as \"mcm\" in if statements"
     },
     {
@@ -186,8 +186,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 201,
-      "end_line": 201,
+      "begin_line": 206,
+      "end_line": 206,
       "message": "Avoid using literals such as \"status\" in if statements"
     },
     {
@@ -198,8 +198,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 205,
-      "end_line": 205,
+      "begin_line": 210,
+      "end_line": 210,
       "message": "Avoid using literals such as \"connection\" in if statements"
     },
     {
@@ -270,8 +270,8 @@
       "class": "ScopeProperties",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
-      "begin_line": 105,
-      "end_line": 105,
+      "begin_line": 106,
+      "end_line": 106,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
@@ -282,8 +282,8 @@
       "class": "ScopeProperties",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
-      "begin_line": 109,
-      "end_line": 109,
+      "begin_line": 110,
+      "end_line": 110,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
@@ -294,8 +294,8 @@
       "class": "ScopeProperties",
       "method": "",
       "file": "src/main/java/com/stucray/raptor/scope/ScopeProperties.java",
-      "begin_line": 112,
-      "end_line": 112,
+      "begin_line": 113,
+      "end_line": 113,
       "message": "Avoid using literals such as 1 in if statements"
     },
     {
@@ -570,8 +570,8 @@
       "class": "TlsStreamSource",
       "method": "next",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 177,
-      "end_line": 177,
+      "begin_line": 182,
+      "end_line": 182,
       "message": "The method 'next()' has a cognitive complexity of 16, current threshold is 15"
     },
     {
@@ -606,8 +606,8 @@
       "class": "TlsStreamSource",
       "method": "checkStatus",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 218,
-      "end_line": 218,
+      "begin_line": 223,
+      "end_line": 223,
       "message": "The method 'checkStatus(JsonNode)' has a cyclomatic complexity of 10."
     },
     {
@@ -762,8 +762,8 @@
       "class": "TlsStreamSource",
       "method": "close",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
-      "begin_line": 447,
-      "end_line": 447,
+      "begin_line": 452,
+      "end_line": 452,
       "message": "Assigning an Object to null is a code smell.  Consider refactoring."
     },
     {
@@ -919,7 +919,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/betfair/TlsStreamSource.java",
       "begin_line": 50,
-      "end_line": 451,
+      "end_line": 456,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
