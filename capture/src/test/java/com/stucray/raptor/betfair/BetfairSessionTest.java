@@ -2,6 +2,7 @@ package com.stucray.raptor.betfair;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -16,6 +17,7 @@ import java.util.List;
 import javax.net.ssl.SSLContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.ExpectedCount;
@@ -182,6 +184,67 @@ class BetfairSessionTest {
 		session.keepAlive();
 
 		assertThat(session.token()).isEqualTo("second");
+	}
+
+	/**
+	 * Keep-alive asks for JSON, which Betfair requires (#72).
+	 *
+	 * <p>Without {@code Accept: application/json} Betfair answers keepAlive with
+	 * a 2xx and a PNG, so the session was never extended and lapsed a fixed time
+	 * after login. This mock refuses a request without the header, which the
+	 * earlier ones did not: they answered JSON whatever was asked.
+	 */
+	@Test
+	void keepAliveAsksForJson() {
+		BetfairSession session = session();
+		server.expect(requestTo("https://certlogin.invalid"))
+				.andRespond(withSuccess("""
+						{"sessionToken":"fresh","loginStatus":"SUCCESS"}""",
+						BETFAIR_CONTENT_TYPE));
+		server.expect(requestTo("https://keepalive.invalid"))
+				.andExpect(header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE))
+				.andExpect(header("X-Authentication", "fresh"))
+				.andRespond(withSuccess("""
+						{"token":"fresh","product":"app-key","status":"SUCCESS","error":""}""",
+						BETFAIR_CONTENT_TYPE));
+
+		session.token();
+		session.keepAlive();
+
+		server.verify();
+		assertThat(session.token()).isEqualTo("fresh");
+	}
+
+	/**
+	 * A reply that is not JSON keeps the token, and says what it was.
+	 *
+	 * <p>It tells us nothing about whether the session is good, so dropping a
+	 * working token would cost a login for no reason. What it must not do is
+	 * pour the body into the log: a PNG's bytes there made the whole container
+	 * log read as binary to {@code grep}.
+	 */
+	@Test
+	void aReplyThatIsNotJsonKeepsTheToken() {
+		BetfairSession session = session();
+		server.expect(requestTo("https://certlogin.invalid"))
+				.andRespond(withSuccess("""
+						{"sessionToken":"fresh","loginStatus":"SUCCESS"}""",
+						BETFAIR_CONTENT_TYPE));
+		server.expect(requestTo("https://keepalive.invalid"))
+				.andRespond(withSuccess("\u0089PNG\r\n\u001a\n\u0000\u0000", MediaType.IMAGE_PNG));
+
+		session.token();
+		session.keepAlive();
+
+		assertThat(session.token()).isEqualTo("fresh");
+	}
+
+	@Test
+	void describesABodyThatIsNotJsonWithoutReproducingIt() {
+		assertThat(BetfairSession.describe("\u0089PNG\r\n\u001a\n\u0000\u0000"))
+				.isEqualTo("not JSON: 10 chars starting \\u0089PNG\\r\\n\\u001a\\n\\u0000\\u0000");
+		assertThat(BetfairSession.describe("<!DOCTYPE html><html>"))
+				.isEqualTo("not JSON: 21 chars starting <!DOCTYPE html><");
 	}
 
 	/** Keep-alive never throws: the next call re-authenticates on its own fault. */
