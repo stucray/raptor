@@ -203,6 +203,9 @@ class BetfairSession {
 					.uri(properties.keepAliveUrl())
 					.header("X-Application", properties.appKey())
 					.header("X-Authentication", current)
+					// Mandatory: without it Betfair answers with a PNG, and the
+					// session is never extended (#72).
+					.accept(MediaType.APPLICATION_JSON)
 					.retrieve()
 					.body(String.class));
 			Object status = response == null ? "no body" : response.get("status");
@@ -210,9 +213,14 @@ class BetfairSession {
 				log.warn("keepAlive said {}; dropping the token so the next call re-logs in",
 						status);
 				invalidate();
+				return;
 			}
+			// Logged so that a working keep-alive leaves evidence: while success
+			// was silent, nothing showed that it had never succeeded (#72).
+			log.info("keepAlive succeeded; the session is extended");
 		} catch (RuntimeException e) {
-			log.warn("keepAlive failed ({}); the next call will re-authenticate", e.toString());
+			log.warn("keepAlive failed ({}); keeping the token, which still lapses at its "
+					+ "fixed expiry unless a later keep-alive succeeds", e.getMessage());
 		}
 	}
 
@@ -232,12 +240,44 @@ class BetfairSession {
 		if (body == null || body.isBlank()) {
 			return Map.of();
 		}
+		String trimmed = body.strip();
+		if (!trimmed.startsWith("{")) {
+			throw new BetfairException("could not read Betfair's response: " + describe(trimmed),
+					"NOT_JSON");
+		}
 		try {
-			return MAPPER.readValue(body, Map.class);
+			return MAPPER.readValue(trimmed, Map.class);
 		} catch (RuntimeException e) {
 			throw new BetfairException("could not read Betfair's response: "
-					+ body.strip().substring(0, Math.min(200, body.strip().length())), e);
+					+ trimmed.substring(0, Math.min(200, trimmed.length())), e);
 		}
+	}
+
+	/**
+	 * A body that is not JSON, described rather than reproduced.
+	 *
+	 * <p>Betfair has answered keepAlive with a PNG (#72), and writing its bytes
+	 * into the log made the whole container log read as binary to {@code grep}.
+	 * The length and an escaped prefix are enough to tell an image from an HTML
+	 * page.
+	 */
+	static String describe(String body) {
+		StringBuilder prefix = new StringBuilder();
+		body.chars().limit(16).forEach(c -> {
+			switch (c) {
+				case '\r' -> prefix.append("\\r");
+				case '\n' -> prefix.append("\\n");
+				case '\t' -> prefix.append("\\t");
+				default -> {
+					if (c >= 0x20 && c < 0x7f) {
+						prefix.append((char) c);
+					} else {
+						prefix.append(String.format("\\u%04x", c));
+					}
+				}
+			}
+		});
+		return "not JSON: " + body.length() + " chars starting " + prefix;
 	}
 
 	/**
