@@ -295,7 +295,9 @@ class CollectorHealthController {
 
     /**
      * Interruptions that left no gap row because the recorder was stopped
-     * rather than dropped, measured against play (paddock#145).
+     * rather than dropped, measured against play (paddock#145). A session that
+     * ended with a gap row was dropped, and the interval after it is the
+     * reconnect, not a restart (#74).
      *
      * <p>An orderly shutdown deliberately writes no {@code capture_gap} row — the
      * session's {@code ended_at} already says when recording stopped — so the
@@ -316,7 +318,7 @@ class CollectorHealthController {
         // happened.
         Integer restarts = jdbc.sql("""
                 with down as (
-                    select ended_at as from_at, connection_slot,
+                    select session_id, ended_at as from_at, connection_slot,
                            lead(started_at) over (
                                partition by coalesce(connection_slot, 0)
                                order by started_at) as to_at
@@ -324,6 +326,12 @@ class CollectorHealthController {
                 select count(*) from down d
                 where d.from_at is not null and d.to_at is not null
                   and d.to_at > d.from_at
+                  -- Stopped, not dropped (#74). A dropped session ends with a
+                  -- gap row, and the interval after it is the reconnect, which
+                  -- gapsDuringPlay already counts as that drop.
+                  and not exists (
+                    select 1 from ledger.capture_gap g
+                    where g.session_id = d.session_id)
                   and exists (
                     select 1 from ledger.market_scope s
                     where %1$s

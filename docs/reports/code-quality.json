@@ -931,7 +931,7 @@
       "method": "",
       "file": "src/main/java/com/stucray/raptor/health/CollectorHealthController.java",
       "begin_line": 38,
-      "end_line": 494,
+      "end_line": 502,
       "message": "This class has too many methods, consider refactoring it."
     },
     {
