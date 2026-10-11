@@ -61,6 +61,13 @@ services:
     # capture. `CaptureLease` and the ABANDONED reconciliation at acquisition
     # (#129) already handle coming back after an unclean exit.
     restart: unless-stopped
+    # Long enough for an orderly stop to finish (#75). Compose's default is 10s,
+    # then SIGKILL, while Spring allows each shutdown phase 60s and the recorder
+    # waits up to 30s per connection slot for its thread. A stop that takes
+    # longer than 10s was being killed before the open session's ended_at was
+    # stamped, so the next recorder closed it as ABANDONED. Pinned against
+    # application.yml by ComposeStopGraceTest.
+    stop_grace_period: 3m
     profiles:
       - app
     depends_on:
