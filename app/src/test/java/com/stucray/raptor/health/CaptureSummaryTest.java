@@ -246,12 +246,14 @@ class CaptureSummaryTest {
                 update ledger.market_scope
                 set in_play_since = kickoff + interval '10 minutes'
                 where market_id = '1.match'""").update();
-        // A gap from kickoff+2m to kickoff+7m.
+        // A gap from kickoff+6m to kickoff+8m, ending the second session: a gap
+        // row marks its session as dropped, so it cannot sit on the first one,
+        // whose end is the restart (#74).
         jdbc.sql("""
                 insert into ledger.capture_gap
                   (id, session_id, started_at, ended_at, cause, ledger_run_id)
-                values (1, 1, now() - interval '20 hours' + interval '2 minutes',
-                        now() - interval '20 hours' + interval '7 minutes',
+                values (1, 2, now() - interval '20 hours' + interval '6 minutes',
+                        now() - interval '20 hours' + interval '8 minutes',
                         'SLEEP', :projection)""")
             .param("projection", ledgerRunId)
             .update();
@@ -291,6 +293,34 @@ class CaptureSummaryTest {
             .andExpect(jsonPath("$.restartsDuringPlay").value(1))
             // The whole point: nothing wrote a gap row for either restart.
             .andExpect(jsonPath("$.gapsDuringPlay").value(0));
+    }
+
+    /**
+     * A reconnect is not a restart (#74).
+     *
+     * <p>A dropped stream ends its session with a gap row, and the reconnect
+     * delay falls between that session's end and the next one's start. That
+     * interval belongs to the drop, which {@code gapsDuringPlay} already counts.
+     * Before #74 it was counted again as a restart, so every drop during play
+     * scored once as weather and once as somebody's decision: the live ledger
+     * read 49 and 49, and not one of the 48 in-play intervals behind the second
+     * figure was an operator's.
+     */
+    @Test
+    void aReconnectAfterADropIsNotCountedAsARestart() throws Exception {
+        // In play from 20h ago until 18h ago.
+        scoped("1.match", true, "DONE", 40_000, 20);
+        // Dropped 19h ago, with the gap row that marks it, and back a minute later.
+        sessionSpanning(1, 21 * 60, 19 * 60 - 1);
+        gapOn(1, 1, 19, 1);
+        sessionSpanning(2, 19 * 60 - 2, 18 * 60 + 30);
+        // Then stopped, no gap row, and started again five minutes later: a restart.
+        sessionSpanning(3, 18 * 60 + 25, 12 * 60);
+
+        mvc.perform(get("/api/health/capture-summary"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.gapsDuringPlay").value(1))
+            .andExpect(jsonPath("$.restartsDuringPlay").value(1));
     }
 
     /**
