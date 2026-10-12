@@ -27,8 +27,16 @@ bin/deploy-agents --check || true
 # without it requests nothing from Betfair.
 bin/deploy-config
 
+# How the old backend stops is recorded on every deploy (#75): its logs and its
+# exit code go with the container otherwise.
+# A trap, so the readers it starts are stopped however this script ends.
+stop_dir="$(mktemp -d)"
+scripts/record-stop.sh start "$stop_dir" || true
+trap 'scripts/record-stop.sh finish "$stop_dir" || true' EXIT
+
 if [[ -n "$RAPTOR_SECRETS" && -r "$RAPTOR_SECRETS" ]] && command -v sops >/dev/null; then
-  exec sops exec-env "$RAPTOR_SECRETS" '
+  # Not `exec`: the stop record is written after compose returns.
+  sops exec-env "$RAPTOR_SECRETS" '
     BETFAIR_APP_KEY="$(printenv betfair-app-key-live)" \
     BETFAIR_USERNAME="$(printenv betfair-username)" \
     BETFAIR_PASSWORD="$(printenv betfair-password)" \
@@ -37,6 +45,7 @@ if [[ -n "$RAPTOR_SECRETS" && -r "$RAPTOR_SECRETS" ]] && command -v sops >/dev/n
     docker compose --profile app up -d --build
     echo "raptor UI:       http://localhost:8086"
     echo "backend health:  http://localhost:8085/actuator/health"'
+  exit
 fi
 
 echo "note: RAPTOR_SECRETS (${RAPTOR_SECRETS:-unset}) not readable, or sops missing —"
