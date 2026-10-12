@@ -53,6 +53,13 @@ branch checkout cannot rewrite or delete a watchdog mid-run. The deploy:
 - reports, under `--check`, anything installed under the label prefix that is
   not in `RAPTOR_AGENTS`.
 
+`bin/up` records how the old backend stopped on every deploy (#75), because its
+logs and exit code are removed with the container. One line per deploy goes to
+`stops.log` in the state directory: exit `143` is a graceful SIGTERM exit, `137`
+a SIGKILL after the grace period, plus the time from SIGTERM to exit. The old
+container's last 200 log lines go to `stops/<stamp>.log`. A deploy that leaves
+its session ABANDONED should be read against that line first.
+
 ## Capture configuration
 
     bin/deploy-config           # deploy config/capture.properties as committed at HEAD
