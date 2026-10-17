@@ -10,7 +10,7 @@ quiet night. So the watchers live outside it, as launchd agents on the host.
 | `keep-awake` | Holds a power assertion while the recorder is recording, and for a while after | resident |
 | `backup` | `pg_dump` of the `raw` schema, verified by reading it back | daily, 05:47Z |
 | `restore-drill` | Restores the newest dump into a throwaway PostgreSQL and compares counts | weekly (daily while red), 06:11Z |
-| `close-out` | `POST /ops/close-out`: the nightly football-data fetch | daily, 23:30Z |
+| `close-out` | `POST /ops/close-out?scheduled=true`: the football-data fetch, which the app runs only when due (Monday and Thursday, `raptor.close-out.days`) because football-data.co.uk allows at most two automated downloads a week (#79); a missed or failed run is retried the next night | fires daily, 23:30Z |
 
 And two scripts a person runs:
 

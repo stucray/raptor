@@ -61,7 +61,7 @@ class CaptureCoverageHealthIndicatorTest {
 		// Tonight's run not yet due-and-missed: every other case is about the
 		// verdict, and an unstubbed punctuality would be null.
 		when(closeOuts.punctuality()).thenReturn(new CloseOutHistory.Punctuality(
-				NOW.minusSeconds(19 * 3600 + 1800), null, false));
+				NOW.minusSeconds(19 * 3600 + 1800), null, null, false, false));
 		// No gap lately, which is the ordinary answer: every case below is about
 		// the verdict, and the wake report must not touch it.
 		when(gaps.lastGapDuringPlay()).thenReturn(java.util.Optional.empty());
@@ -615,7 +615,8 @@ class CaptureCoverageHealthIndicatorTest {
 		when(recorder.state()).thenReturn(RecorderState.RECORDING);
 		when(census.summarise()).thenReturn(busy());
 		Instant due = Instant.parse("2026-09-06T23:30:00Z");
-		when(closeOuts.punctuality()).thenReturn(new CloseOutHistory.Punctuality(due, null, true));
+		when(closeOuts.punctuality()).thenReturn(
+				new CloseOutHistory.Punctuality(due, null, null, true, true));
 
 		Health health = indicator.health();
 
@@ -623,7 +624,9 @@ class CaptureCoverageHealthIndicatorTest {
 		assertThat((java.util.Map<String, Object>) health.getDetails().get("closeOutDue"))
 				.containsEntry("dueAt", "2026-09-06T23:30:00Z")
 				.containsEntry("overdue", true)
-				.doesNotContainKey("startedAt");
+				.containsEntry("stale", true)
+				.doesNotContainKey("startedAt")
+				.doesNotContainKey("finishedAt");
 	}
 
 	/** A run that came late says by how much — the case #333 left silent. */
@@ -634,12 +637,15 @@ class CaptureCoverageHealthIndicatorTest {
 		when(census.summarise()).thenReturn(busy());
 		Instant due = Instant.parse("2026-09-06T23:30:00Z");
 		when(closeOuts.punctuality()).thenReturn(
-				new CloseOutHistory.Punctuality(due, due.plusSeconds(63 * 60), false));
+				new CloseOutHistory.Punctuality(due, due.plusSeconds(63 * 60),
+						due.plusSeconds(64 * 60), false, false));
 
 		assertThat((java.util.Map<String, Object>) indicator.health().getDetails().get("closeOutDue"))
 				.containsEntry("overdue", false)
+				.containsEntry("stale", false)
 				.containsEntry("startedAt", "2026-09-07T00:33:00Z")
-				.containsEntry("startedLateBySeconds", 3780L);
+				.containsEntry("startedLateBySeconds", 3780L)
+				.containsEntry("finishedAt", "2026-09-07T00:34:00Z");
 	}
 
 	/**

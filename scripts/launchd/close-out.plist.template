@@ -27,6 +27,15 @@
          launchd starts a firing missed during sleep on wake, where Spring's
          timer slipped by every minute of it.
 
+         EVERY NIGHT, THOUGH THE SWEEP IS TWICE A WEEK (#79). football-data.co.uk
+         asks for at most two automated downloads a week, so the app is due on
+         Monday and Thursday only (raptor.close-out.days) and answers NOT_DUE to
+         this firing on other nights. Firing nightly is what makes a run missed
+         to sleep or a football-data outage cost one night rather than half a
+         week, so there is deliberately no Weekday key here: the schedule lives
+         in the app, in UTC, where the local-time conversion above cannot shift
+         the day as well as the hour.
+
          RunAtLoad is deliberately absent: deploying the agent must not sweep
          the archive. `launchctl kickstart` forces one. -->
     <key>StartCalendarInterval</key>

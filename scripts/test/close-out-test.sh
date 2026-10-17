@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for scripts/raptor-close-out.sh — the launchd trigger for the nightly
-# close-out (#334).
+# close-out (#334), which the app declines on days it is not due (#79).
 #
 # WHY THESE EXIST. The script's one judgement is WHEN TO TRY AGAIN. On wake the
 # Docker VM may not be listening yet, and a single refused connection would cost
@@ -34,6 +34,7 @@ cat > "$STUB/curl" <<'STUBEOF'
 dir="$STUB_DIR"
 n=$(( $(cat "$dir/calls" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$dir/calls"
+printf '%s\n' "$*" >> "$dir/args"
 line=$(sed -n "${n}p" "$dir/responses"); [[ -z "$line" ]] && line=$(tail -1 "$dir/responses")
 rc=${line%% *}; rest=${line#* }; code=${rest%% *}; body=${rest#* }
 out=""
@@ -45,7 +46,7 @@ STUBEOF
 chmod +x "$STUB/curl"
 
 run() { # $@ = response lines; sets $out, $rc, $calls
-  rm -f "$STUB/calls"
+  rm -f "$STUB/calls" "$STUB/args"
   printf '%s\n' "$@" > "$STUB/responses"
   out="$(STUB_DIR="$STUB" CLOSE_OUT_PATH_PREFIX="$STUB" CLOSE_OUT_ATTEMPTS=3 CLOSE_OUT_RETRY_S=0 \
          "$SCRIPT" 2>&1)"
@@ -63,6 +64,16 @@ echo "close-out:"
 
 run '0 200 {"status":"COMPLETED","archiveFiles":3}'
 expect 0 1 'close-out ran (attempt 1): {"status":"COMPLETED"' "a normal night"
+
+# The timer always asks as the timer (#79): without the parameter the app would
+# sweep every night, against football-data.co.uk's twice-a-week limit.
+grep -q -- '/ops/close-out?scheduled=true' "$STUB/args" && pass \
+  || fail "the firing did not ask with scheduled=true: $(cat "$STUB/args")"
+
+# An off day: the app declines, and the log must say skip, not ran (#79).
+run '0 200 {"status":"NOT_DUE","archiveFiles":0,"detail":"the run due at 2026-10-12T23:30:00Z completed at 2026-10-12T23:30:20Z"}'
+expect 0 1 "close-out not due:" "an off day is a skip"
+[[ "$out" != *"close-out ran"* ]] && pass || fail "an off day was logged as a run: $out"
 
 # A failed sweep is still a run: the app recorded it, the heartbeat pushes it.
 run '0 200 {"status":"FAILED","archiveFiles":0}'

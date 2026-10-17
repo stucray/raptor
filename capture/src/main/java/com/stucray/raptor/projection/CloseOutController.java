@@ -6,13 +6,15 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * The close-out's only trigger since #334: launchd's
- * close-out launchd agent POSTs here nightly, and on wake when the
- * night's firing passed during sleep. Localhost-only like every {@code /ops/*}
- * surface, and the same request by hand is how to run one early.
+ * close-out launchd agent POSTs here nightly with {@code scheduled=true}, and on
+ * wake when the night's firing passed during sleep. Since #79 that firing only
+ * sweeps when a run is due. Localhost-only like every {@code /ops/*} surface, and
+ * the same request by hand, without the parameter, is how to run one early.
  *
  * <p>Synchronous: the sweep is 22 conditional requests and returns in seconds,
  * and a caller that waits for the verdict can log it.
@@ -32,9 +34,17 @@ class CloseOutController {
 		this.closeOut = closeOut;
 	}
 
+	/**
+	 * @param scheduled true from the launchd firing, which runs only when a close-out
+	 *     is due (#79) and otherwise answers 200 {@code NOT_DUE}. Absent — by hand —
+	 *     it always runs. An image from before #79 ignores the parameter and runs,
+	 *     so a new agent in front of an old image keeps the nightly sweep rather
+	 *     than losing it.
+	 */
 	@PostMapping("/ops/close-out")
-	ResponseEntity<Map<String, Object>> closeOut() {
-		NightlyCloseOut.Result result = closeOut.closeOut();
+	ResponseEntity<Map<String, Object>> closeOut(
+			@RequestParam(defaultValue = "false") boolean scheduled) {
+		NightlyCloseOut.Result result = scheduled ? closeOut.scheduledCloseOut() : closeOut.closeOut();
 		Map<String, Object> body = new LinkedHashMap<>();
 		body.put("status", result.status().name());
 		body.put("archiveFiles", result.archiveFiles());

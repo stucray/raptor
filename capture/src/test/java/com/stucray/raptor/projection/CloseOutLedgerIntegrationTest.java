@@ -100,16 +100,56 @@ class CloseOutLedgerIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("a run from before the due time does not count as tonight's")
+	@DisplayName("a run from before the due time does not count as the due run's")
 	void aRunBeforeTheDueTimeDoesNotCount() {
-		// Two days back is before any lastDue(now), whatever the time of day.
+		// Eight days back is before any lastDue(now), whatever the day and time.
+		// It said two days while the run was nightly; on a twice-weekly schedule the
+		// last due time can be four days back, and two would count on a Monday (#79).
 		jdbc.sql("""
 						insert into batch.close_out (started_at, finished_at, status, archive_status)
-						values (now() - interval '2 days', now() - interval '2 days',
+						values (now() - interval '8 days', now() - interval '8 days',
 							'COMPLETED', 'COMPLETED')""")
 				.update();
 
-		assertThat(ledger.punctuality().startedAt()).isNull();
+		CloseOutHistory.Punctuality punctuality = ledger.punctuality();
+		assertThat(punctuality.startedAt()).isNull();
+		assertThat(punctuality.finishedAt()).isNull();
+		assertThat(ledger.completedSinceDue()).isEmpty();
+	}
+
+	@Test
+	@DisplayName("punctuality carries the first finish since the due time, whatever its verdict (#79)")
+	void punctualityCarriesTheFinish() {
+		long id = ledger.started();
+		assertThat(ledger.punctuality().finishedAt())
+				.as("a run in flight has not finished")
+				.isNull();
+
+		ledger.finished(id, false, 0, "archive sweep failed (503)");
+
+		assertThat(ledger.punctuality().finishedAt())
+				.as("a failed run finished: the trigger is alive, which is what stale asks")
+				.isNotNull();
+		assertThat(ledger.punctuality().stale()).isFalse();
+	}
+
+	@Test
+	@DisplayName("only a COMPLETED run since the due time makes the scheduled one not due (#79)")
+	void onlyACompletedRunCounts() {
+		long failed = ledger.started();
+		ledger.finished(failed, false, 0, "archive sweep failed (503)");
+		assertThat(ledger.completedSinceDue())
+				.as("a failed sweep left the work undone, so the next firing must retry")
+				.isEmpty();
+
+		long running = ledger.started();
+		assertThat(ledger.completedSinceDue())
+				.as("a run in flight has not completed")
+				.isEmpty();
+
+		ledger.finished(running, true, 2, null);
+		assertThat(ledger.completedSinceDue()).isPresent();
+		assertThat(ledger.completedSinceDue().orElseThrow()).isAfterOrEqualTo(ledger.lastDue());
 	}
 
 	/**

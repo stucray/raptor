@@ -50,7 +50,7 @@ answerable without anything downstream.
 ## Operate
 
 The watchers that must outlive the application — heartbeat, keep-awake, backup,
-restore drill and the nightly close-out trigger — are launchd agents, configured
+restore drill and the close-out trigger — are launchd agents, configured
 by an `ops.env` that keeps every path and label out of the repository. See
 [docs/ops.md](docs/ops.md).
 
