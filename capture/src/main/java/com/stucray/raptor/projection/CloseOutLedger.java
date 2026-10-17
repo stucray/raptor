@@ -89,7 +89,7 @@ class CloseOutLedger implements CloseOutHistory {
 	public Punctuality punctuality() {
 		Instant now = clock.instant();
 		Instant dueAt = schedule.lastDue(now);
-		Optional<Instant> first = jdbc.sql("""
+		Optional<Instant> firstStart = jdbc.sql("""
 						select started_at from batch.close_out
 						where started_at >= ?
 						order by started_at
@@ -97,7 +97,43 @@ class CloseOutLedger implements CloseOutHistory {
 				.param(at(dueAt))
 				.query((rs, rowNum) -> rs.getObject("started_at", OffsetDateTime.class).toInstant())
 				.optional();
-		return schedule.punctuality(now, first.orElse(null));
+		// Keyed on the FINISH, not the start, and the difference is the Docker VM's
+		// clock: after a sleep it can come back behind the host, so a run launchd
+		// started after the due time can record a start before it. Its finish is
+		// read after the VM has caught up.
+		Optional<Instant> firstFinish = jdbc.sql("""
+						select finished_at from batch.close_out
+						where finished_at >= ?
+						order by finished_at
+						limit 1""")
+				.param(at(dueAt))
+				.query((rs, rowNum) -> rs.getObject("finished_at", OffsetDateTime.class).toInstant())
+				.optional();
+		return schedule.punctuality(now, firstStart.orElse(null), firstFinish.orElse(null));
+	}
+
+	/**
+	 * When the scheduled run that is due has already been done: the first run to
+	 * COMPLETE since the last due time, if any has (#79).
+	 *
+	 * <p>COMPLETED only. A failed sweep leaves the work undone, so the next
+	 * nightly firing tries again rather than waiting for the next scheduled day.
+	 * Keyed on the finish, for the VM-clock reason in {@link #punctuality}.
+	 */
+	Optional<Instant> completedSinceDue() {
+		return jdbc.sql("""
+						select finished_at from batch.close_out
+						where status = 'COMPLETED' and finished_at >= ?
+						order by finished_at
+						limit 1""")
+				.param(at(schedule.lastDue(clock.instant())))
+				.query((rs, rowNum) -> rs.getObject("finished_at", OffsetDateTime.class).toInstant())
+				.optional();
+	}
+
+	/** The due time {@link #completedSinceDue} measured from, for the reply that says so. */
+	Instant lastDue() {
+		return schedule.lastDue(clock.instant());
 	}
 
 	private static String status(boolean successful) {

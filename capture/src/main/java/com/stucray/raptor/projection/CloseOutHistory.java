@@ -35,7 +35,7 @@ public interface CloseOutHistory {
 	Optional<CloseOut> latestFinished();
 
 	/**
-	 * Whether tonight's run came when it was due (#334).
+	 * Whether the last scheduled run came when it was due (#334), and finished (#79).
 	 *
 	 * <p>A fact, like the rest of this interface: its reader is capture health,
 	 * whose verdict drives an automatic restart, and a restart cannot make a
@@ -56,13 +56,19 @@ public interface CloseOutHistory {
 			@Nullable String detail) {}
 
 	/**
-	 * @param dueAt the most recent time a run was due
+	 * @param dueAt the most recent time a run was due, on a scheduled day (#79)
 	 * @param startedAt when the first run since then started — RUNNING or
 	 *     finished, launchd or by hand — or null if none has
+	 * @param finishedAt when the first run since then finished, whatever its
+	 *     verdict, or null if none has
 	 * @param overdue no run has started, and the stated margin past
 	 *     {@code dueAt} has gone: the trigger is late, stopped, or on the wrong
 	 *     clock. Before this a late run and a good night read identically until
 	 *     the 26-hour absence.
+	 * @param stale no run has finished, and a longer margin has gone. What the
+	 *     heartbeat alerts on (#79): it measures against the schedule, where the
+	 *     fixed 26 hours it replaces would fire on every day off.
 	 */
-	record Punctuality(Instant dueAt, @Nullable Instant startedAt, boolean overdue) {}
+	record Punctuality(Instant dueAt, @Nullable Instant startedAt, @Nullable Instant finishedAt,
+			boolean overdue, boolean stale) {}
 }

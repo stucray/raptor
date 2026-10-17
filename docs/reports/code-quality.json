@@ -376,10 +376,10 @@
       "priority": 3,
       "package": "com.stucray.raptor.projection",
       "class": "NightlyCloseOut",
-      "method": "closeOut",
+      "method": "underLock",
       "file": "src/main/java/com/stucray/raptor/projection/NightlyCloseOut.java",
-      "begin_line": 71,
-      "end_line": 71,
+      "begin_line": 113,
+      "end_line": 113,
       "message": "Ensure that resources like this Held object are closed after use"
     },
     {

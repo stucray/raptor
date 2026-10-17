@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Fire the nightly close-out (#334).
+# Fire the nightly close-out (#334), which sweeps only when one is due (#79).
 #
 # WHY LAUNCHD AND NOT SPRING. The close-out was a Spring cron, and Spring waits
 # out a cron's delay on the monotonic clock, which inside the Docker VM does not
@@ -11,9 +11,17 @@
 # into one. That catch-up is the whole reason this file exists; the curl is
 # incidental.
 #
-# WHAT IT DOES. POSTs /ops/close-out and logs the verdict. The app holds an
-# advisory lock for the run, so this landing beside a hand-run POST gets a 409
-# and stands down rather than sweeping the archive twice.
+# WHAT IT DOES. POSTs /ops/close-out?scheduled=true and logs the verdict. The
+# app holds an advisory lock for the run, so this landing beside a hand-run POST
+# gets a 409 and stands down rather than sweeping the archive twice.
+#
+# WHY NIGHTLY WHEN THE SWEEP IS TWICE A WEEK (#79). football-data.co.uk asks for
+# at most two automated downloads a week, so the app answers NOT_DUE unless no
+# run has completed since the last scheduled due time (Monday and Thursday
+# 23:30Z). Firing every night is what makes a missed or failed run cost one
+# night rather than half a week: the next firing finds the work undone and does
+# it. The schedule is the app's (raptor.close-out.days), so this script never
+# needs to know it. A hand-run POST without the parameter always sweeps.
 #
 # WHY IT RETRIES, AND ONLY ON "NOT LISTENING". On wake launchd fires at once,
 # and the Docker VM may not be answering yet; a single refused connection would
@@ -37,7 +45,7 @@ source "$(dirname "$0")/raptor-ops-env.sh"
 set -uo pipefail
 export PATH="${CLOSE_OUT_PATH_PREFIX:+$CLOSE_OUT_PATH_PREFIX:}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-URL="${RAPTOR_CLOSE_OUT_URL:-$RAPTOR_BACKEND_URL/ops/close-out}"
+URL="${RAPTOR_CLOSE_OUT_URL:-$RAPTOR_BACKEND_URL/ops/close-out}?scheduled=true"
 ATTEMPTS="${CLOSE_OUT_ATTEMPTS:-30}"
 RETRY_S="${CLOSE_OUT_RETRY_S:-20}"
 
@@ -65,7 +73,16 @@ for (( attempt = 1; attempt <= ATTEMPTS; attempt++ )); do
     exit 1
   fi
   case "$code" in
-    200) echo "$(ts) close-out ran (attempt $attempt): $body"; exit 0 ;;
+    200)
+      # A 200 is also how the app declines: the request did what it was for,
+      # which is to ask. Logged as a skip, so a log of off days does not read as
+      # a log of sweeps.
+      if [[ "$body" == *'"status":"NOT_DUE"'* ]]; then
+        echo "$(ts) close-out not due: $body"
+      else
+        echo "$(ts) close-out ran (attempt $attempt): $body"
+      fi
+      exit 0 ;;
     409) echo "$(ts) close-out already running; left to that run: $body"; exit 0 ;;
     *)   echo "$(ts) FAILED: HTTP $code on attempt $attempt: $body"; exit 1 ;;
   esac

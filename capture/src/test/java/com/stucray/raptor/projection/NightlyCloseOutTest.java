@@ -11,11 +11,14 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.stucray.raptor.archive.ArchiveRefresh;
+import java.time.Instant;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,7 +32,7 @@ import org.mockito.InOrder;
  * still about a failure that is silent in production: a run that does not record
  * itself, or an unsuccessful run that logs like a successful one.
  */
-@DisplayName("The nightly close-out fetches the archive and always records what it did")
+@DisplayName("The close-out fetches the archive when due and always records what it did")
 class NightlyCloseOutTest {
 
 	private final ArchiveRefresh archive = mock(ArchiveRefresh.class);
@@ -113,5 +116,48 @@ class NightlyCloseOutTest {
 		verify(ledger).started();
 		verify(archive).refreshCurrentSeason();
 		verify(ledger, org.mockito.Mockito.never()).finished(anyLong(), eq(false), anyInt(), any());
+	}
+
+	@Test
+	@DisplayName("a scheduled firing after the due run completed does nothing and records nothing (#79)")
+	void aScheduledFiringThatIsNotDueDeclines() {
+		Instant due = Instant.parse("2026-10-12T23:30:00Z");
+		Instant completed = Instant.parse("2026-10-12T23:30:20Z");
+		when(ledger.completedSinceDue()).thenReturn(Optional.of(completed));
+		when(ledger.lastDue()).thenReturn(due);
+
+		NightlyCloseOut.Result result = closeOut.scheduledCloseOut();
+
+		assertThat(result.status()).isEqualTo(NightlyCloseOut.Status.NOT_DUE);
+		assertThat(result.detail())
+				.isEqualTo("the run due at 2026-10-12T23:30:00Z completed at 2026-10-12T23:30:20Z");
+		verifyNoInteractions(archive);
+		verify(ledger, never()).started();
+		verify(held).close();
+	}
+
+	@Test
+	@DisplayName("a scheduled firing with the due run not yet done runs and records it (#79)")
+	void aScheduledFiringThatIsDueRuns() {
+		when(ledger.completedSinceDue()).thenReturn(Optional.empty());
+		when(ledger.started()).thenReturn(11L);
+		when(archive.refreshCurrentSeason())
+				.thenReturn(new ArchiveRefresh.Outcome(true, 2, "archive: changed=2"));
+
+		NightlyCloseOut.Result result = closeOut.scheduledCloseOut();
+
+		assertThat(result.status()).isEqualTo(NightlyCloseOut.Status.COMPLETED);
+		verify(ledger).finished(11L, true, 2, null);
+	}
+
+	@Test
+	@DisplayName("a scheduled firing beside a run in flight is refused before it looks at the ledger")
+	void aScheduledFiringBesideARunningOneIsRefused() {
+		when(lock.tryHold()).thenReturn(null);
+
+		NightlyCloseOut.Result result = closeOut.scheduledCloseOut();
+
+		assertThat(result.status()).isEqualTo(NightlyCloseOut.Status.ALREADY_RUNNING);
+		verifyNoInteractions(archive, ledger);
 	}
 }

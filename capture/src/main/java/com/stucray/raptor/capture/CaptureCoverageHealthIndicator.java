@@ -265,11 +265,18 @@ class CaptureCoverageHealthIndicator implements HealthIndicator {
 		Map<String, Object> due = new LinkedHashMap<>();
 		due.put("dueAt", punctuality.dueAt().toString());
 		due.put("overdue", punctuality.overdue());
+		// What the heartbeat alerts on since #79, in place of its fixed 26 hours:
+		// with the sweep due twice a week, "no finish for a day" is every day off.
+		due.put("stale", punctuality.stale());
 		Instant startedAt = punctuality.startedAt();
 		if (startedAt != null) {
 			due.put("startedAt", startedAt.toString());
 			due.put("startedLateBySeconds",
 					Duration.between(punctuality.dueAt(), startedAt).toSeconds());
+		}
+		Instant finishedAt = punctuality.finishedAt();
+		if (finishedAt != null) {
+			due.put("finishedAt", finishedAt.toString());
 		}
 		health.withDetail("closeOutDue", due);
 		// WHAT A SUSPEND COST, for the report the host sends on wake (#291).

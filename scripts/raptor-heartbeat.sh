@@ -206,9 +206,9 @@ RESTART_COOLDOWN_S="${RESTART_COOLDOWN_S:-21600}"  # 6h: longer than a card. One
 
 STALE_CLOSE_OUT_S="${STALE_CLOSE_OUT_S:-93600}" # 26h: a day plus slack, so one late
                                                 # or slow run does not fire it, and a
-                                                # missed night does. The close-out is
-                                                # daily, so anything under 24h would
-                                                # alert every day just before it ran.
+                                                # missed night does. Only for an image
+                                                # from before #79, which sweeps nightly;
+                                                # a newer one publishes closeOutDue.stale.
 
 set -uo pipefail
 # launchd hands the job a near-empty environment, so PATH is set explicitly.
@@ -362,15 +362,31 @@ if [[ -n "$capture_body" ]] && printf '%s' "$capture_body" | jq -e . >/dev/null 
   #
   # READ, do not re-derive: `lastCloseOutSecondsAgo` is the app's own answer,
   # keyed on the last run FINISHING (#316). Absent means the field said "never".
+  #
+  # AND SINCE #79, `closeOutDue.stale` is the verdict. The sweep is due twice a
+  # week (football-data.co.uk's limit), so "nothing finished for 26h" is every
+  # day off; the app knows the schedule and says whether the run that was due
+  # has finished. The 26h rule stays only for an image from before #79, which
+  # publishes no `stale` and still sweeps nightly.
   since_close_out=$(printf '%s' "$capture_body" \
       | jq -r '.components.captureCoverage.details.lastCloseOutSecondsAgo // empty')
+  # Not `// empty`: jq's alternative operator treats false as absent, which would
+  # turn the app's "not stale" into "an old image" and bring the 26h rule back.
+  close_out_stale=$(printf '%s' "$capture_body" \
+      | jq -r '.components.captureCoverage.details.closeOutDue.stale
+               | if . == null then empty else tostring end')
+  close_out_due_at=$(printf '%s' "$capture_body" \
+      | jq -r '.components.captureCoverage.details.closeOutDue.dueAt // empty')
   if [[ -z "$since_close_out" ]]; then
     # "never" is a finding, not a fresh start to be forgiven: the only states
     # that produce it are a chain that has never worked and a database that has
     # lost the ledger, and both want a human.
     add_status "STALE-CLOSE-OUT"
-    add_detail "no nightly close-out has ever finished — the archive fetch is not running"
-  elif (( since_close_out > STALE_CLOSE_OUT_S )); then
+    add_detail "no close-out has ever finished — the archive fetch is not running"
+  elif [[ "$close_out_stale" == "true" ]]; then
+    add_status "STALE-CLOSE-OUT"
+    add_detail "the close-out due at ${close_out_due_at:-?} has not finished; the last one finished $(( since_close_out / 3600 ))h ago — the timer has stopped firing"
+  elif [[ -z "$close_out_stale" ]] && (( since_close_out > STALE_CLOSE_OUT_S )); then
     add_status "STALE-CLOSE-OUT"
     add_detail "last close-out finished $(( since_close_out / 3600 ))h ago (threshold $(( STALE_CLOSE_OUT_S / 3600 ))h) — the nightly timer has stopped firing"
   fi

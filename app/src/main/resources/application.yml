@@ -289,9 +289,18 @@ raptor:
     markets-per-connection: ${RAPTOR_SCOPE_MARKETS_PER_CONNECTION:200}
     max-connections: ${RAPTOR_SCOPE_MAX_CONNECTIONS:4}
   close-out:
-    # The nightly close-out (#199). Since #316 it only fetches the current
+    # The close-out (#199). Since #316 it only fetches the current
     # football-data season into raw: overround-analysis projects query now, as
     # the first step of its own close-out at 00:30Z, an hour after this.
+    #
+    # TWICE A WEEK, NOT NIGHTLY (#79). football-data.co.uk's fair data usage
+    # policy allows "at most light (twice per week maximum) automated download".
+    # Its Last-Modified headers show weekend results landing Sunday night or
+    # Monday evening and midweek ones Tuesday to Thursday evening, so the sweep is
+    # due Monday and Thursday at 23:30Z. launchd still fires every night: the
+    # firing passes scheduled=true and the app declines it unless no run has
+    # COMPLETED since the last due time, so a night lost to sleep or a
+    # football-data outage is retried the next night. A run by hand always runs.
     #
     # 23:30Z, and the hour is not arbitrary. A 20:00Z kickoff leaves scope at the
     # 130-minute in-play timeout (~22:10Z), so the evening's football is over; and
@@ -313,7 +322,14 @@ raptor:
     # LOCAL and the host runs at UTC+7 — the two must agree, and `overdue` on
     # /actuator/health/capture is what says when they stop agreeing.
     due: ${RAPTOR_CLOSE_OUT_DUE:23:30}
+    # The UTC weekdays it is due on (#79), comma-separated. Every day of the week
+    # restores the nightly sweep.
+    days: ${RAPTOR_CLOSE_OUT_DAYS:MONDAY,THURSDAY}
     overdue-after: ${RAPTOR_CLOSE_OUT_OVERDUE_AFTER:PT1H}
+    # How long after the due time capture health reports `closeOutDue.stale` if no
+    # run has FINISHED. The heartbeat alerts on it in place of its fixed 26h, which
+    # fired a nightly run's missed night at due + 2h — the same margin.
+    stale-after: ${RAPTOR_CLOSE_OUT_STALE_AFTER:PT2H}
   projection:
     capture-ledger:
       # The one projection that runs on a timer rather than on request, and the

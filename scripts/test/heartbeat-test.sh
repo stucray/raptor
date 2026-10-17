@@ -39,6 +39,7 @@ pass() { passed=$(( passed + 1 )); }
 capture_json() { # $1 = seconds since the last close-out finished ("" = never)
                  # $2 = coverage status  $3 = closeOut finishedAt ("" = none)
                  # $4 = unused since #316 (was the capture half)  $5 = archive verdict
+                 # $10 = closeOutDue.stale ("" = absent: an image from before #79)
   local since="$1" cover="$2" at="$3" arc="${5:-COMPLETED}"
   local details='"state":"IDLE","marketsInScope":0,"live":0'
   [[ -n "$since" ]] && details="$details,\"lastCloseOutSecondsAgo\":$since"
@@ -54,6 +55,9 @@ capture_json() { # $1 = seconds since the last close-out finished ("" = never)
   # which is what the app publishes on every pass where no gap overlapped play.
   if [[ -n "${7:-}" ]]; then
     details="$details,\"gapInPlay\":{\"endedAt\":\"$7\",\"cause\":\"${8:-SLEEP}\",\"seconds\":322,\"markets\":12,\"live\":${9:-3}}"
+  fi
+  if [[ -n "${10:-}" ]]; then
+    details="$details,\"closeOutDue\":{\"dueAt\":\"2026-10-15T23:30:00Z\",\"overdue\":false,\"stale\":${10}}"
   fi
   local analysis=""
   if [[ -n "${6:-}" ]]; then
@@ -176,7 +180,7 @@ out=$(run)
 expect_sent_count 2 "a completed close-out after failures"
 teardown
 
-# --- 5: no close-out finished in >26h yields STALE-CLOSE-OUT ----------------
+# --- 5: an image from before #79: no close-out finished in >26h is stale ----
 setup "$(capture_json 100000 UP 2026-09-05T23:31:21Z COMPLETED COMPLETED)"
 out=$(run)
 expect_status "$out" STALE-CLOSE-OUT
@@ -184,10 +188,33 @@ printf '%s' "$out" | grep -q "27h ago" || fail "the alert should say how stale"
 pass
 teardown
 
-# --- 6: 26h is not yet stale ------------------------------------------------
+# --- 6: ...and 26h is not yet stale ------------------------------------------
 setup "$(capture_json 90000 UP 2026-09-07T23:31:21Z COMPLETED COMPLETED)"
 out=$(run)
 expect_status "$out" OK
+teardown
+
+# --- 6a: since #79 the app's verdict replaces 26h: days off are not stale ----
+# Thursday's run finished 3.5 days ago and Monday's is not yet due. A fixed 26h
+# would fire every day off; the schedule says nothing is missing. "false" is
+# also the value jq's `//` would have mistaken for absent.
+setup "$(capture_json 300000 UP 2026-10-15T23:31:21Z COMPLETED COMPLETED "" "" "" "" false)"
+out=$(run)
+expect_status "$out" OK
+teardown
+
+# --- 6b: ...and a due run that has not finished is stale, however recent ----
+setup "$(capture_json 9000 UP 2026-10-12T23:31:21Z COMPLETED COMPLETED "" "" "" "" true)"
+out=$(run)
+expect_status "$out" STALE-CLOSE-OUT
+printf '%s' "$out" | grep -q "due at 2026-10-15T23:30:00Z has not finished" \
+  && pass || fail "the alert should name the run that was due: $out"
+teardown
+
+# --- 6c: "never" stays a finding even when the app says not stale ----------
+setup "$(capture_json "" UP "" COMPLETED COMPLETED "" "" "" "" false)"
+out=$(run)
+expect_status "$out" STALE-CLOSE-OUT
 teardown
 
 # --- 7: "never" is a finding ------------------------------------------------

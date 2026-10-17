@@ -1,6 +1,8 @@
 package com.stucray.raptor.projection;
 
 import com.stucray.raptor.archive.ArchiveRefresh;
+import java.time.Instant;
+import java.util.function.Supplier;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,8 +10,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * The nightly close-out: fetching the current football-data season into
- * {@code raw}, every night, without being asked.
+ * The close-out: fetching the current football-data season into {@code raw},
+ * without being asked.
+ *
+ * <p><b>Asked every night, done twice a week (#79).</b> The name is from when the
+ * work was nightly too. football-data.co.uk asks for at most two automated
+ * downloads a week, so the scheduled firing only sweeps when a run is due
+ * ({@link #scheduledCloseOut}); see {@link CloseOutSchedule} for which days.
  *
  * <p><b>It used to project too, and since #316 it does not.</b> From #199 this
  * was where {@code raw} became {@code query} unbidden — the live capture backlog
@@ -29,8 +36,9 @@ import org.springframework.stereotype.Component;
  * <p><b>A run is recorded whether or not the fetch works</b>, in
  * {@code batch.close_out}: a row when it starts and its verdict when it ends, so
  * a run that never came back stays RUNNING and a night the timer never fired
- * leaves no row at all. A football-data outage costs a night's results, which
- * the next sweep fetches; it is reported, never thrown.
+ * leaves no row at all. So does a firing declined as NOT_DUE, deliberately: a
+ * skip is not a run. A football-data outage costs a night's results, which the
+ * next night's firing retries; it is reported, never thrown.
  *
  * <p>Off by default in code, on in {@code application.yml}; with it off there is
  * no {@code /ops/close-out} either.
@@ -68,13 +76,47 @@ class NightlyCloseOut {
 	 * came is reported on capture health rather than trusted.
 	 */
 	Result closeOut() {
+		return underLock(this::run);
+	}
+
+	/**
+	 * What the nightly launchd firing asks for: a close-out, unless the one that is
+	 * due has already been done (#79).
+	 *
+	 * <p><b>Why the firing is still nightly.</b> football-data.co.uk asks for at
+	 * most two automated downloads a week, so the sweep is due on two days only
+	 * ({@link CloseOutSchedule}). But a firing that only came on those two days
+	 * would turn one missed night — the Mac asleep, football-data down — into a
+	 * wait until the next scheduled day. So launchd fires every night, and this
+	 * declines unless no run has COMPLETED since the last due time. A failed or
+	 * missed run is therefore retried the next night, and a good one is not
+	 * repeated until the next scheduled day.
+	 *
+	 * <p>A decline writes no ledger row: a skip must not read as a verdict. The
+	 * check happens under the lock, so a firing that lands beside a hand-run
+	 * close-out either waits it out as ALREADY_RUNNING or sees it completed.
+	 */
+	Result scheduledCloseOut() {
+		return underLock(() -> {
+			Instant completed = ledger.completedSinceDue().orElse(null);
+			if (completed != null) {
+				String detail = "the run due at " + ledger.lastDue() + " completed at " + completed;
+				log.info("scheduled close-out not due: {}", detail);
+				return new Result(Status.NOT_DUE, 0, detail);
+			}
+			return run();
+		});
+	}
+
+	/** {@code work} with the close-out lock held, or ALREADY_RUNNING if another run holds it. */
+	private Result underLock(Supplier<Result> work) {
 		CloseOutLock.Held held = lock.tryHold();
 		if (held == null) {
 			log.info("close-out asked for while one is running; leaving it to that run");
 			return new Result(Status.ALREADY_RUNNING, 0, null);
 		}
 		try (held) {
-			return run();
+			return work.get();
 		}
 	}
 
@@ -110,12 +152,13 @@ class NightlyCloseOut {
 		return new Result(successful ? Status.COMPLETED : Status.FAILED, archiveFiles, detail);
 	}
 
-	enum Status { COMPLETED, FAILED, ALREADY_RUNNING }
+	enum Status { COMPLETED, FAILED, ALREADY_RUNNING, NOT_DUE }
 
 	/**
 	 * What one request for a close-out did.
 	 *
-	 * @param detail why, when it failed; null on a clean run and on a refusal
+	 * @param detail why, when it failed or was not due; null on a clean run and
+	 *     when one was already running
 	 */
 	record Result(Status status, int archiveFiles, @Nullable String detail) {}
 }
